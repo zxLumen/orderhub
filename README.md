@@ -140,6 +140,8 @@ Register-ScheduledTask -TaskName "OrderHub" -Action $action -Trigger @($t1, $t2)
 
 > 登录时跑一次，之后每 5 分钟自检，服务或 Chrome 挂了会被拉起。
 > 日志在 `data\autostart.log` 和 `data\chrome.log`。
+>
+> 服务带单实例保护（`data\orderhub.lock`）：已有实例在跑时，再启动会直接退出并提示持有者 PID，避免两个调度器同时采集。
 
 ## iPhone 短信自动化（iOS 17+）
 

@@ -6,6 +6,7 @@ import importlib.util
 import logging
 import threading
 import time
+from datetime import datetime
 
 from . import config
 from .collectors.jd import collect_jd
@@ -45,14 +46,38 @@ class Scheduler:
                 else:
                     log.debug("Kuaidi100 not configured; parcel polling skipped")
             if config.ENABLE_JD_COLLECTOR and now >= self._next_jd:
-                self._next_jd = now + max(1800, config.JD_INTERVAL_SECONDS)
-                if importlib.util.find_spec("playwright") is None:
-                    if not self._warned_playwright:
-                        log.warning("JD collector enabled but Playwright is not installed")
-                        self._warned_playwright = True
+                interval = max(1800, config.JD_INTERVAL_SECONDS)
+                last = self._last_jd_run_at()
+                if last is not None and now - last < interval:
+                    # A manual run already happened recently; don't duplicate it.
+                    self._next_jd = last + interval
+                    log.debug("JD collected %.0fs ago; next run deferred", now - last)
                 else:
-                    threading.Thread(target=self._run_jd, daemon=True).start()
+                    self._next_jd = now + interval
+                    if importlib.util.find_spec("playwright") is None:
+                        if not self._warned_playwright:
+                            log.warning("JD collector enabled but Playwright is not installed")
+                            self._warned_playwright = True
+                    else:
+                        threading.Thread(target=self._run_jd, daemon=True).start()
             self._stop.wait(15)
+
+    def _last_jd_run_at(self) -> float | None:
+        """Epoch seconds of the most recent JD run, or None."""
+        try:
+            with session() as conn:
+                row = conn.execute(
+                    "SELECT started_at FROM collector_runs WHERE platform='jd' "
+                    "ORDER BY started_at DESC LIMIT 1"
+                ).fetchone()
+        except Exception:  # pragma: no cover - defensive
+            return None
+        if not row or not row["started_at"]:
+            return None
+        try:
+            return datetime.fromisoformat(row["started_at"]).timestamp()
+        except ValueError:
+            return None
 
     def _run_parcel(self) -> None:
         try:
