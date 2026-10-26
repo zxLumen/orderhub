@@ -56,7 +56,10 @@
       <section class="view hidden" id="view-search">
         <div class="searchbox">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <input id="searchInput" type="search" inputmode="search" autocomplete="off" placeholder="搜商品、店铺、运单号…">
+          <input id="searchInput" type="text" inputmode="search" enterkeyhint="search"
+                 name="orderhub-q" autocomplete="off" autocorrect="off"
+                 autocapitalize="none" spellcheck="false"
+                 placeholder="搜商品、店铺、运单号…">
           <button class="clear-btn hidden" id="clearSearch" aria-label="清空">×</button>
         </div>
         <div class="filter-row" id="platformFilters">
@@ -80,6 +83,7 @@
           <div class="button-row">
             <button class="btn" id="pollParcelsBtn">刷新包裹</button>
             <button class="btn" id="collectJdBtn">采集京东</button>
+            <button class="btn" id="collectJdFullBtn">全量采集</button>
             <button class="btn" id="manualAddBtn">手动添加</button>
             <button class="btn" id="exportBtn">导出数据</button>
           </div>

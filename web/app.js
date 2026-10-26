@@ -210,6 +210,14 @@
     `;
   }
 
+  function thumbHtml(order) {
+    const url = order && order.image_url;
+    if (url) {
+      return `<div class="thumb"><img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>`;
+    }
+    return `<div class="thumb">📦</div>`;
+  }
+
   function orderCard(order) {
     const title = order.title || "(无商品名)";
     const sub = [order.shop, order.tracking_no ? `运单 ${order.tracking_no}` : ""]
@@ -218,7 +226,7 @@
     const amount = order.amount != null ? `<span class="card-amount">${esc(money(order.amount))}</span>` : "";
     return `
       <button type="button" class="card" data-order-id="${esc(order.id)}">
-        <div class="thumb">📦</div>
+        ${thumbHtml(order)}
         <div class="card-main">
           <div class="card-top">${platformBadge(order.platform)}${status}</div>
           <div class="card-title">${esc(title)}</div>
@@ -397,7 +405,7 @@
         const order = item.order;
         return `
           <button type="button" class="card" data-search-index="${index}">
-            <div class="thumb">📦</div>
+            ${thumbHtml(order)}
             <div class="card-main">
               <div class="card-top">${platformBadge(order.platform)}${statusBadge(order.status, order.status_text)}</div>
               <div class="card-title">${esc(order.title || "(无商品名)")}</div>
@@ -447,20 +455,49 @@
       <div class="k">${esc(key)}</div><div class="v">${value}</div>`).join("")}</div>`;
   }
 
+  function parseRaw(order) {
+    if (!order || !order.raw_json) return null;
+    try { return JSON.parse(order.raw_json); } catch (_) { return null; }
+  }
+
+  function orderFacts(order, raw) {
+    const wares = raw && Array.isArray(raw.wareList) ? raw.wareList : [];
+    const quantity = wares.reduce((sum, ware) => sum + (parseInt(ware && ware.num, 10) || 0), 0);
+    const payment = raw && raw.itemPayInfo ? raw.itemPayInfo.paymentTypeName || "" : "";
+    const logistics = order.logistics_text || (raw && raw.logistics) || "";
+    return { quantity, payment, logistics };
+  }
+
   function openOrderSheet(order) {
-    const url = order.url ? `<a href="${esc(order.url)}" target="_blank" rel="noreferrer">打开订单</a>` : "";
+    const raw = parseRaw(order);
+    const facts = orderFacts(order, raw);
+    const links = [];
+    if (order.url) {
+      links.push(`<a href="${esc(order.url)}" target="_blank" rel="noreferrer">打开订单</a>`);
+    }
+    if (order.product_url) {
+      links.push(`<a href="${esc(order.product_url)}" target="_blank" rel="noreferrer">商品页</a>`);
+    }
     openSheet(`
-      <h2>${esc(order.title || "(无商品名)")}</h2>
-      <div class="card-top">${platformBadge(order.platform)}${statusBadge(order.status, order.status_text)}</div>
+      <div class="order-head">
+        ${thumbHtml(order)}
+        <div>
+          <h2>${esc(order.title || "(无商品名)")}</h2>
+          <div class="card-top">${platformBadge(order.platform)}${statusBadge(order.status, order.status_text)}</div>
+        </div>
+      </div>
       ${kv([
         ["店铺", esc(order.shop || "")],
         ["金额", order.amount != null ? esc(money(order.amount)) : ""],
+        ["数量", facts.quantity ? `${esc(facts.quantity)} 件` : ""],
+        ["支付", esc(facts.payment)],
         ["下单时间", esc(timeText(order.order_time))],
-        ["运单号", esc(order.tracking_no || "")],
         ["订单号", esc(order.platform_order_id || "")],
-        ["链接", url],
+        ["运单号", esc(order.tracking_no || "")],
+        ["物流", facts.logistics ? `<span class="logistics">${esc(facts.logistics)}</span>` : ""],
+        ["链接", links.join(" · ")],
       ])}
-      ${order.raw_json ? `<div class="raw">${esc(String(order.raw_json).slice(0, 3000))}</div>` : ""}
+      ${order.raw_json ? `<details class="raw-box"><summary>原始数据</summary><pre>${esc(String(order.raw_json))}</pre></details>` : ""}
     `);
   }
 
@@ -524,6 +561,25 @@
       await api("/api/collectors/jd/run", { method: "POST", body: "{}" });
       toast("已开始京东采集，稍后看结果");
       setTimeout(() => loadDashboard({ silent: true }), 12000);
+    } catch (error) { toast(error.message); }
+  }
+
+  async function collectJdFull() {
+    if (!state.config?.jd_collector_enabled) {
+      toast("先在 .env 打开 ENABLE_JD_COLLECTOR");
+      return;
+    }
+    const ok = window.confirm(
+      "全量采集会遍历所有时间档位（今年、过去各年、2014 前），可能需要几分钟。继续？"
+    );
+    if (!ok) return;
+    try {
+      await api("/api/collectors/jd/run", {
+        method: "POST",
+        body: JSON.stringify({ mode: "full" }),
+      });
+      toast("已开始全量采集，进度看「采集记录」");
+      setTimeout(() => loadDashboard({ silent: true }), 20000);
     } catch (error) { toast(error.message); }
   }
 
@@ -633,6 +689,30 @@
   // Bindings
   // ------------------------------------------------------------------
   function bind() {
+    // Images come from JD's CDN; a dead URL must fall back to the box glyph.
+    document.addEventListener("error", (event) => {
+      const node = event.target;
+      if (!(node instanceof HTMLImageElement) || !node.closest(".thumb")) return;
+      node.parentElement.textContent = "📦";
+    }, true);
+
+    // Chrome sometimes restores/autofills the search field; keep it empty on load.
+    const searchInput = $("#searchInput");
+    let searchTouched = false;
+    const clearAutofill = () => {
+      if (searchTouched || document.activeElement === searchInput) return;
+      if (!searchInput.value) return;
+      searchInput.value = "";
+      state.searchQuery = "";
+      $("#clearSearch").classList.add("hidden");
+    };
+    setTimeout(clearAutofill, 0);
+    setTimeout(clearAutofill, 400);
+    window.addEventListener("pageshow", () => {
+      setTimeout(clearAutofill, 0);
+      setTimeout(clearAutofill, 400);
+    });
+
     $$(".tab").forEach((node) => node.addEventListener("click", () => switchTab(node.dataset.tab)));
     $("#refreshBtn").addEventListener("click", () => loadDashboard());
 
@@ -649,6 +729,7 @@
     }));
 
     $("#searchInput").addEventListener("input", (event) => {
+      searchTouched = true;
       state.searchQuery = event.target.value;
       $("#clearSearch").classList.toggle("hidden", !state.searchQuery);
       clearTimeout(searchTimer);
@@ -669,6 +750,7 @@
 
     $("#pollParcelsBtn").addEventListener("click", pollParcels);
     $("#collectJdBtn").addEventListener("click", collectJd);
+    $("#collectJdFullBtn").addEventListener("click", collectJdFull);
     $("#manualAddBtn").addEventListener("click", openManualForm);
     $("#exportBtn").addEventListener("click", exportData);
     $("#saveTokenBtn").addEventListener("click", () => saveTokenFrom($("#tokenInput").value));

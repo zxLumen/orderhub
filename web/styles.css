@@ -433,6 +433,18 @@ button { cursor: pointer; }
   margin-top: 14px; padding: 12px; background: var(--bg-soft); border-radius: 12px;
   font-size: 12px; line-height: 1.65; color: var(--text-2); white-space: pre-wrap; word-break: break-word;
 }
+.order-head { display: flex; gap: 12px; align-items: flex-start; }
+.order-head .thumb { width: 64px; height: 64px; flex: 0 0 64px; }
+.order-head .card-top { margin-bottom: 0; }
+.order-head h2 { margin: 0 0 7px; }
+.sheet .logistics { line-height: 1.55; color: var(--text-2); }
+.sheet .raw-box { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 10px; }
+.sheet .raw-box summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.sheet .raw-box pre {
+  margin: 8px 0 0; max-height: 240px; overflow: auto; padding: 10px;
+  background: var(--bg-soft); border-radius: 10px;
+  font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--text-2);
+}
 .sheet .event-list { margin-top: 16px; }
 .sheet .event { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.5; }
 .sheet .event:last-child { border-bottom: 0; }
