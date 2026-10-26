@@ -121,16 +121,25 @@ tailscale serve --bg 8000
 
 ### 开机自启（可选）
 
-- Chrome：把 `scripts\start_chrome.bat` 的快捷方式放进 `shell:startup`
-- OrderHub：用 [NSSM](https://nssm.cc/) 注册为服务，或任务计划程序“登录时启动”：
+仓库自带幂等守护，不需要 NSSM：
 
-```bat
-nssm install OrderHub "C:\OrderHub\.venv\Scripts\python.exe" "-m app.server"
-nssm set OrderHub AppDirectory "C:\OrderHub"
-nssm start OrderHub
+- `scripts\ensure_running.ps1`：9333 不通就起无头 Chrome，8000 不通就起服务，两个都通什么都不做
+- `scripts\autostart.vbs`：以零窗口方式调用上面的脚本
+- 注册任务计划（当前用户即可，无需管理员）：
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument '"<仓库路径>\scripts\autostart.vbs"'
+$t1 = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$t2 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+        -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
+Register-ScheduledTask -TaskName "OrderHub" -Action $action -Trigger @($t1, $t2) `
+        -Settings $settings -Principal (New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive) -Force
 ```
 
-> 如果 Windows 重启后停在登录界面，Chrome 不会自动启动；需要自动登录，或重启后手动点一下。
+> 登录时跑一次，之后每 5 分钟自检，服务或 Chrome 挂了会被拉起。
+> 日志在 `data\autostart.log` 和 `data\chrome.log`。
 
 ## iPhone 短信自动化（iOS 17+）
 
@@ -227,39 +236,46 @@ KUAIDI100_PHONE=1234
 
 ### 为什么用 CDP
 
-不自己启动无头浏览器，而是接管你手动登录的真实 Chrome：真实 Cookie、真实 IP、真实指纹，验证码频率最低。
+不自己启动 Playwright 自带的浏览器，而是接管一个真实 Chrome：真实 Cookie、真实 IP、真实指纹，验证码频率最低。
 
 ### 步骤
 
-1. 双击 `scripts\start_chrome.bat`
-2. 在弹出的 Chrome 里扫码登录京东
-
-> 如果这个专用配置的 Chrome 已经开着，先完全退出再双击，否则 `9222` 调试端口可能不会重新开启。
-> 检查端口：浏览器打开 `http://127.0.0.1:9222/json/version`，能看到 JSON 就说明成功。
+1. 首次登录用可见窗口：双击 `scripts\jd_login.bat`，在弹出的 Chrome 里扫码登录京东
+2. 登录后切回无窗口常驻：双击 `scripts\jd_background.bat`
+   - 后台模式用 `--headless=new`，没有窗口、没有任务栏图标、不占 Alt+Tab
+   - 同时覆盖 UA，避免 `HeadlessChrome` 特征暴露
+   - 两种模式共用 `data\chrome-profile`，Cookie 不会丢
 3. `.env` 打开采集：
 
 ```ini
 ENABLE_JD_COLLECTOR=1
-JD_CDP_URL=http://127.0.0.1:9222
+JD_CDP_URL=http://127.0.0.1:9333
 JD_INTERVAL_SECONDS=21600
-JD_MAX_PAGES=3
+JD_MAX_PAGES=50
 JD_MAX_SCROLLS=8
 ```
 
 4. 重启 OrderHub
-5. PWA → 更多 → 采集京东（或等定时任务）
+5. PWA → 更多：
+   - 「采集京东」只采近 3 个月（定时任务也走这个模式）
+   - 「全量采集」遍历「今年内 / 各年 / 2014 前」所有档位，用来一次性补历史
+
+### 采集内容
+
+- 订单列表接口（`pcorder_center_list`）返回的**整条 JSON 会存进 `orders.raw_json`**：商品、数量、价格与支付方式、店铺、状态、详情页 PassKey、收货信息、按钮配置等
+- 常用字段由它派生到列上：`url`（详情页）、`product_url`（商品页）、`image_url`（商品图）、`logistics_text`（最近物流文案）
+- 以后想加字段（支付方式、商品数量、子订单、标签…）**只改读取逻辑，不需要重新采集**
+- 全量采集只跑一次用于补历史；日常定时任务只采近 3 个月
 
 ### 验证码 / 登录失效
 
-- 采集器检测到验证码会立即停止，并推送 Bark
-- 你打开那个 Chrome 完成滑块即可，下一次自动恢复
-- 每次运行都会记录在“采集记录”里，方便统计频率
-- 如果太频繁，把 `ENABLE_JD_COLLECTOR=0`，退回短信 + 快递100 模式
+- **重启电脑不需要重新登录**：登录态存在 profile 的 Cookie 里，通常几周到几个月才失效
+- 采集记录出现 `login_required` 或 `captcha` 时：`scripts\jd_login.bat` → 完成登录/滑块 → `scripts\jd_background.bat` 切回后台
+- 每次运行都会记录在「采集记录」里，方便统计验证码频率
 
 ### 安全
 
-- `9222` 只监听本机，**不要做端口映射**
-- 不要用无头模式，不要频繁刷新，不要多开
+- `9333` 只监听本机，**不要做端口映射**
 - 采集器只读订单，不下单、不支付
 
 ---
