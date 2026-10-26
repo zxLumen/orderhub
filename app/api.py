@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import mimetypes
+import sys
 import threading
 import urllib.parse
 from http import HTTPStatus
@@ -13,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from . import config, db
-from .collectors.jd import collect_jd_async
+from .collectors.jd import collect_jd_async, normalize_mode
 from .db import session, utc_now
 from .services.ingest import ingest_capture, ingest_sms, poll_parcels
 
@@ -70,7 +71,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data: blob:; "
+            "default-src 'self'; img-src 'self' data: blob: https://*.360buyimg.com; "
             "style-src 'self' 'unsafe-inline'; script-src 'self'; "
             "connect-src 'self'; manifest-src 'self'; worker-src 'self'",
         )
@@ -331,8 +332,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/collectors/jd/run":
-            threading.Thread(target=collect_jd_async, daemon=True).start()
-            self._json(HTTPStatus.ACCEPTED, {"ok": True, "started": True})
+            mode = normalize_mode(payload.get("mode"))
+            threading.Thread(target=collect_jd_async, args=(mode,), daemon=True).start()
+            self._json(HTTPStatus.ACCEPTED, {"ok": True, "started": True, "mode": mode})
             return
 
         raise ApiError(HTTPStatus.NOT_FOUND, "not found")
@@ -409,6 +411,9 @@ def _insert_order(conn: Any, payload: dict[str, Any]) -> int:
         order_time=payload.get("order_time"),
         tracking_no=payload.get("tracking_no") or None,
         url=payload.get("url") or None,
+        product_url=payload.get("product_url") or None,
+        image_url=payload.get("image_url") or None,
+        logistics_text=payload.get("logistics_text") or None,
         raw=payload.get("raw"),
     )
 
@@ -446,6 +451,23 @@ def _poll_thread() -> None:
         log.exception("Manual parcel poll failed")
 
 
+class Server(ThreadingHTTPServer):
+    """Threaded HTTP server that ignores client disconnects.
+
+    Browsers and local health probes close keep-alive sockets without a proper
+    shutdown; socketserver would print a full traceback for each one.
+    """
+
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:  # pragma: no cover
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            log.debug("client disconnected: %s", client_address)
+            return
+        super().handle_error(request, client_address)
+
+
 def serve() -> None:
     db.init_db()
     loopback = {"127.0.0.1", "localhost", "::1"}
@@ -459,8 +481,7 @@ def serve() -> None:
             "ORDERHUB_TOKEN is empty; this is only safe for loopback access. "
             "Set a token before using Tailscale Serve or LAN access."
         )
-    httpd = ThreadingHTTPServer((config.HOST, config.PORT), Handler)
-    httpd.daemon_threads = True
+    httpd = Server((config.HOST, config.PORT), Handler)
     log.info("OrderHub listening on http://%s:%s", config.HOST, config.PORT)
     try:
         httpd.serve_forever()

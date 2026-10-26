@@ -129,6 +129,9 @@ CREATE TABLE IF NOT EXISTS orders (
     order_time TEXT,
     tracking_no TEXT,
     url TEXT,
+    product_url TEXT,
+    image_url TEXT,
+    logistics_text TEXT,
     raw_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -287,6 +290,15 @@ def init_db(db_path: Path | None = None) -> None:
         except sqlite3.OperationalError:
             # Some minimal SQLite builds omit FTS5; search falls back to LIKE.
             pass
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first release of the schema."""
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
+    for name in ("image_url", "product_url", "logistics_text"):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {name} TEXT")
 
 
 def _fts_delete(conn: sqlite3.Connection, doc_type: str, doc_id: str) -> None:
@@ -357,11 +369,17 @@ def upsert_order(
     order_time: str | None = None,
     tracking_no: str | None = None,
     url: str | None = None,
+    product_url: str | None = None,
+    image_url: str | None = None,
+    logistics_text: str | None = None,
     raw: Any = None,
 ) -> int:
     platform = (platform or "unknown").strip().lower()
     order_time = normalize_time(order_time)
     tracking_no = tracking_no.strip().upper() if tracking_no else None
+    image_url = (image_url or "").strip() or None
+    product_url = (product_url or "").strip() or None
+    logistics_text = (logistics_text or "").strip() or None
     platform_order_id = (platform_order_id or "").strip() or _synthetic_order_id(
         platform, title, amount, order_time, tracking_no
     )
@@ -370,9 +388,9 @@ def upsert_order(
     conn.execute(
         """
         INSERT INTO orders(platform, platform_order_id, title, shop, amount, status,
-                           status_text, order_time, tracking_no, url, raw_json,
-                           created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           status_text, order_time, tracking_no, url, product_url,
+                           image_url, logistics_text, raw_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(platform, platform_order_id) DO UPDATE SET
             title=COALESCE(NULLIF(excluded.title, ''), orders.title),
             shop=COALESCE(NULLIF(excluded.shop, ''), orders.shop),
@@ -381,7 +399,10 @@ def upsert_order(
             status_text=COALESCE(NULLIF(excluded.status_text, ''), orders.status_text),
             order_time=COALESCE(excluded.order_time, orders.order_time),
             tracking_no=COALESCE(excluded.tracking_no, orders.tracking_no),
-            url=COALESCE(excluded.url, orders.url),
+            url=COALESCE(NULLIF(excluded.url, ''), orders.url),
+            product_url=COALESCE(NULLIF(excluded.product_url, ''), orders.product_url),
+            image_url=COALESCE(NULLIF(excluded.image_url, ''), orders.image_url),
+            logistics_text=COALESCE(NULLIF(excluded.logistics_text, ''), orders.logistics_text),
             raw_json=COALESCE(excluded.raw_json, orders.raw_json),
             updated_at=excluded.updated_at
         """,
@@ -396,6 +417,9 @@ def upsert_order(
             order_time,
             tracking_no or None,
             url or None,
+            product_url,
+            image_url,
+            logistics_text,
             raw_json,
             now,
             now,

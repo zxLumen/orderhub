@@ -6,8 +6,7 @@ import unittest
 from pathlib import Path
 
 from app import config, db
-from app.api import Handler, serve
-from http.server import ThreadingHTTPServer
+from app.api import Handler, Server, serve
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,7 +26,7 @@ class ApiTest(unittest.TestCase):
         config.WEB_DIR = ROOT / "web"
         config.MAX_BODY_BYTES = 2 * 1024 * 1024
         db.init_db(config.DB_PATH)
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd = Server(("127.0.0.1", 0), Handler)
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -140,6 +139,7 @@ class ApiTest(unittest.TestCase):
                 "amount": 29.9,
                 "status": "shipped",
                 "tracking_no": "SF1234567890123",
+                "image_url": "https://img13.360buyimg.com/n0/s500x500/example.jpg",
             },
             token="testtoken",
         )
@@ -147,6 +147,10 @@ class ApiTest(unittest.TestCase):
         status, payload, _ = self.request("GET", "/api/export", token="testtoken")
         self.assertEqual(status, 200)
         self.assertEqual(len(payload["data"]["orders"]), 1)
+        self.assertEqual(
+            payload["data"]["orders"][0]["image_url"],
+            "https://img13.360buyimg.com/n0/s500x500/example.jpg",
+        )
 
     def test_refuses_public_bind_without_token(self):
         old_host, old_token = config.HOST, config.TOKEN
