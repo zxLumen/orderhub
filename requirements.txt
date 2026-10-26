@@ -1,0 +1,5 @@
+# OrderHub core has no third-party dependencies.
+# It runs on a plain Python 3.11+ install (Windows included).
+#
+# Optional JD collector (real Chrome over CDP):
+#   pip install -r requirements-jd.txt

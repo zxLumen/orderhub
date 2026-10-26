@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OrderHub">
+  <title>OrderHub · 我的订单</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M4.5 7.7 12 12l7.5-4.3M12 12v8.6" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        </div>
+        <div>
+          <div class="brand-title">OrderHub</div>
+          <div class="brand-sub" id="brandSub">正在连接…</div>
+        </div>
+      </div>
+      <button class="icon-btn" id="refreshBtn" title="刷新" aria-label="刷新">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </header>
+
+    <main id="main">
+      <section class="view" id="view-recent">
+        <div class="summary-grid" id="summaryGrid"></div>
+        <div class="section-head">
+          <h2>最近订单</h2>
+          <span class="muted" id="recentHint"></span>
+        </div>
+        <div id="recentList" class="list"></div>
+        <div class="section-head spaced">
+          <h2>最新动态</h2>
+          <span class="muted">短信 · 抓屏</span>
+        </div>
+        <div id="recentActivity" class="timeline compact"></div>
+      </section>
+
+      <section class="view hidden" id="view-parcels">
+        <div class="filter-row" id="parcelFilters">
+          <button class="chip active" data-active="1">在途</button>
+          <button class="chip" data-active="0">全部</button>
+        </div>
+        <div id="parcelList" class="list"></div>
+      </section>
+
+      <section class="view hidden" id="view-search">
+        <div class="searchbox">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <input id="searchInput" type="search" inputmode="search" autocomplete="off" placeholder="搜商品、店铺、运单号…">
+          <button class="clear-btn hidden" id="clearSearch" aria-label="清空">×</button>
+        </div>
+        <div class="filter-row" id="platformFilters">
+          <button class="chip active" data-platform="">全部</button>
+          <button class="chip" data-platform="jd">京东</button>
+          <button class="chip" data-platform="taobao">淘宝</button>
+          <button class="chip" data-platform="douyin">抖音</button>
+          <button class="chip" data-platform="meituan">美团</button>
+        </div>
+        <div id="searchMeta" class="muted search-meta"></div>
+        <div id="searchList" class="list"></div>
+      </section>
+
+      <section class="view hidden" id="view-more">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>系统状态</h2>
+            <span class="muted" id="versionText"></span>
+          </div>
+          <div id="healthGrid" class="health-grid"></div>
+          <div class="button-row">
+            <button class="btn" id="pollParcelsBtn">刷新包裹</button>
+            <button class="btn" id="collectJdBtn">采集京东</button>
+            <button class="btn" id="manualAddBtn">手动添加</button>
+            <button class="btn" id="exportBtn">导出数据</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>采集记录</h2><span class="muted">验证码频率</span></div>
+          <div id="runsList" class="runs"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>最近短信</h2><span class="muted">仅白名单</span></div>
+          <div id="smsList" class="timeline"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>抓屏</h2><span class="muted">抖音补录</span></div>
+          <div id="captureList" class="list compact-list"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>设置</h2></div>
+          <label class="field">
+            <span>访问令牌</span>
+            <input id="tokenInput" type="password" autocomplete="off" placeholder="ORDERHUB_TOKEN">
+          </label>
+          <div class="button-row">
+            <button class="btn" id="saveTokenBtn">保存令牌</button>
+            <button class="btn ghost" id="clearTokenBtn">清除</button>
+          </div>
+          <p class="muted small">令牌只保存在本机浏览器；短信快捷指令和 API 调用也使用同一个令牌。</p>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar" aria-label="主导航">
+      <button class="tab active" data-tab="recent">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        <span>最近</span>
+      </button>
+      <button class="tab" data-tab="parcels">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3.5 7.7 12 12l8.5-4.3M12 12v9" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+        <span>包裹</span>
+      </button>
+      <button class="tab" data-tab="search">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span>搜索</span>
+      </button>
+      <button class="tab" data-tab="more">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg>
+        <span>更多</span>
+      </button>
+    </nav>
+  </div>
+
+  <div class="sheet-backdrop hidden" id="sheetBackdrop"></div>
+  <aside class="sheet hidden" id="sheet" role="dialog" aria-modal="true">
+    <div class="sheet-handle"></div>
+    <div id="sheetContent"></div>
+  </aside>
+
+  <div class="modal-backdrop hidden" id="tokenBackdrop">
+    <div class="modal">
+      <h2>需要访问令牌</h2>
+      <p class="muted">输入 Windows 上 .env 里的 ORDERHUB_TOKEN。</p>
+      <input id="tokenModalInput" type="password" autocomplete="off" placeholder="访问令牌">
+      <div class="button-row">
+        <button class="btn" id="tokenModalSave">连接</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
