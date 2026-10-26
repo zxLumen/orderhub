@@ -15,7 +15,11 @@ from .html_dom import Node, first_text, parse_html
 ORDER_ID_TEXT = re.compile(r"订单号\s*[:：]?\s*([0-9]{6,})")
 TRACKING_TEXT = re.compile(r"(?:运单号|快递单号)\s*[:：]?\s*([A-Za-z0-9-]{8,24})")
 MONEY = re.compile(r"[¥￥]\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)")
-TIME = re.compile(r"(20\d{2}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?)")
+TIME = re.compile(r"(20\d{2}[-/]\d{2}[-/]\d{2}(?:\s+\d{2}:\d{2}(?::\d{2})?)?)")
+ORDER_TIME_NEAR = re.compile(
+    r"(?:订单号|下单时间|提交时间)[^\n]{0,40}?(20\d{2}[-/]\d{2}[-/]\d{2}"
+    r"(?:\s+\d{2}:\d{2}(?::\d{2})?)?)"
+)
 
 STATUS_MAP = [
     ("cancelled", ("已取消", "取消")),
@@ -53,6 +57,20 @@ def _money(text: str) -> float | None:
         return float(match.group(1).replace(",", ""))
     except ValueError:
         return None
+
+
+def _order_time(block: Node, text: str) -> str | None:
+    # Prefer the dedicated order-time element; promo banners often contain dates.
+    for class_name in ("dealtime", "order-time", "order-date", "time"):
+        value = _class_text(block, class_name)
+        match = TIME.search(value)
+        if match:
+            return match.group(1).replace("/", "-")
+    match = ORDER_TIME_NEAR.search(text)
+    if match:
+        return match.group(1).replace("/", "-")
+    match = TIME.search(text)
+    return match.group(1).replace("/", "-") if match else None
 
 
 def _candidate_blocks(doc: Node) -> list[Node]:
@@ -154,7 +172,7 @@ def parse_jd_orders(html: str) -> list[dict[str, Any]]:
         if amount is None:
             amount = _money(text)
         tracking_match = TRACKING_TEXT.search(text)
-        time_match = TIME.search(text)
+        order_time = _order_time(block, text)
         orders.append(
             {
                 "platform": "jd",
@@ -164,7 +182,7 @@ def parse_jd_orders(html: str) -> list[dict[str, Any]]:
                 "amount": amount,
                 "status": status,
                 "status_text": status_norm or status_text[:40],
-                "order_time": time_match.group(1) if time_match else None,
+                "order_time": order_time,
                 "tracking_no": tracking_match.group(1) if tracking_match else None,
                 "url": url,
                 "raw": {"order_id": order_id, "text": text[:2000]},

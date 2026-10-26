@@ -70,6 +70,14 @@ ORDERHUB_DATA_DIR=C:\OrderHub\data
 BARK_URL=https://api.day.app/你的key
 ```
 
+默认只监听 `127.0.0.1`，Tailscale Serve 会代理它。只有想用局域网 IP 直连时才改成：
+
+```ini
+ORDERHUB_HOST=0.0.0.0
+```
+
+并且必须同时设置 token；否则服务会拒绝启动。
+
 生成令牌：
 
 ```bat
@@ -234,6 +242,8 @@ KUAIDI100_PHONE=1234
 ENABLE_JD_COLLECTOR=1
 JD_CDP_URL=http://127.0.0.1:9222
 JD_INTERVAL_SECONDS=21600
+JD_MAX_PAGES=3
+JD_MAX_SCROLLS=8
 ```
 
 4. 重启 OrderHub
@@ -339,7 +349,7 @@ Authorization: Bearer <ORDERHUB_TOKEN>
 python -m unittest discover -v
 ```
 
-覆盖：短信解析、去重、包裹状态不回退、中文搜索、京东 HTML 解析。
+覆盖：短信解析（平台/运单号/状态）、去重、包裹状态按事件时间推进、退款只改订单、中文搜索、路径解析、JSON 导入、Bark payload、HTTP 鉴权/路径穿越/body 上限、京东 HTML/时间解析。
 
 ---
 

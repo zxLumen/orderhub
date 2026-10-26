@@ -26,16 +26,17 @@ ASCII_WORD = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]{1,}")
 # dependency on the IANA tz database (not bundled with every Windows Python).
 CHINA_TZ = timezone(timedelta(hours=8))
 
-STATUS_RANK = {
-    "unknown": 0,
-    "accepted": 1,
-    "in_transit": 2,
-    "out_for_delivery": 3,
-    "ready_for_pickup": 4,
-    "delivering": 5,
-    "delivered": 6,
-    "returned": 7,
-    "refunded": 8,
+# Shipment statuses are logistics states. Refunds are order-level and must not
+# overwrite a parcel's delivery state.
+SHIPMENT_STATUSES = {
+    "unknown",
+    "accepted",
+    "in_transit",
+    "out_for_delivery",
+    "ready_for_pickup",
+    "delivering",
+    "delivered",
+    "returned",
 }
 
 
@@ -269,9 +270,17 @@ def session(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
 
 
 def init_db(db_path: Path | None = None) -> None:
-    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    config.DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-    with session(db_path) as conn:
+    if db_path is None:
+        db_file = config.DB_PATH
+        debug_dir = config.DEBUG_DIR
+    else:
+        db_file = Path(db_path)
+        if not db_file.is_absolute():
+            db_file = Path.cwd() / db_file
+        debug_dir = db_file.parent / "debug"
+    db_file.parent.mkdir(parents=True, exist_ok=True)
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    with session(db_file) as conn:
         conn.executescript(SCHEMA)
         try:
             conn.executescript(FTS_SCHEMA)
@@ -428,16 +437,24 @@ def upsert_shipment(
     last_event_at: str | None = None,
     order_id: int | None = None,
 ) -> tuple[int, bool]:
-    """Upsert a shipment; returns (rowid, status_changed)."""
+    """Upsert a shipment; returns (rowid, status_changed).
+
+    Status follows event chronology rather than a monotonic rank, so a newer
+    "delivered" can correct an older "returned"/"in_transit". Older SMS events
+    may still be stored as parcel_events, but they cannot roll the status back.
+    """
     tracking_no = (tracking_no or "").strip().upper()
     if not tracking_no:
         raise ValueError("tracking_no is required")
     now = utc_now()
-    last_event_at = normalize_time(last_event_at)
+    event_at = normalize_time(last_event_at) or now
+    status = (status or "unknown").lower()
+    if status not in SHIPMENT_STATUSES:
+        status = "unknown"
+
     existing = conn.execute(
         "SELECT * FROM shipments WHERE tracking_no=?", (tracking_no,)
     ).fetchone()
-    changed = False
 
     if existing is None:
         conn.execute(
@@ -452,11 +469,11 @@ def upsert_shipment(
                 carrier or "",
                 carrier_name or "",
                 (platform or "").lower(),
-                status or "unknown",
+                status,
                 status_text or "",
                 pickup_code or "",
                 location or "",
-                last_event_at,
+                event_at,
                 order_id,
                 now,
                 now,
@@ -465,44 +482,114 @@ def upsert_shipment(
         changed = True
     else:
         old_status = existing["status"] or "unknown"
-        new_status = status or old_status
-        if STATUS_RANK.get(new_status, 0) < STATUS_RANK.get(old_status, 0):
-            new_status = old_status
-        if new_status != old_status:
-            changed = True
-        conn.execute(
-            """
-            UPDATE shipments SET
-                carrier=COALESCE(NULLIF(?, ''), carrier),
-                carrier_name=COALESCE(NULLIF(?, ''), carrier_name),
-                platform=CASE WHEN platform = '' THEN ? ELSE platform END,
-                status=?,
-                status_text=COALESCE(NULLIF(?, ''), status_text),
-                pickup_code=COALESCE(NULLIF(?, ''), pickup_code),
-                location=COALESCE(NULLIF(?, ''), location),
-                last_event_at=COALESCE(?, last_event_at),
-                order_id=COALESCE(?, order_id),
-                updated_at=?
-            WHERE tracking_no=?
-            """,
-            (
-                carrier or "",
-                carrier_name or "",
-                (platform or "").lower(),
-                new_status,
-                status_text or "",
-                pickup_code or "",
-                location or "",
-                last_event_at,
-                order_id,
-                now,
-                tracking_no,
-            ),
-        )
+        old_event_at = existing["last_event_at"]
+        stale = bool(old_event_at and event_at < old_event_at)
+        effective_status = old_status if (stale or status == "unknown") else status
+        changed = effective_status != old_status
+
+        if stale:
+            # Keep the newer status/pickup/location, but accept stable metadata
+            # from the delayed event (carrier, platform, order link).
+            conn.execute(
+                """
+                UPDATE shipments SET
+                    carrier=COALESCE(NULLIF(?, ''), carrier),
+                    carrier_name=COALESCE(NULLIF(?, ''), carrier_name),
+                    platform=CASE WHEN platform = '' THEN ? ELSE platform END,
+                    order_id=COALESCE(?, order_id),
+                    updated_at=?
+                WHERE tracking_no=?
+                """,
+                (carrier or "", carrier_name or "", (platform or "").lower(), order_id, now, tracking_no),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE shipments SET
+                    carrier=COALESCE(NULLIF(?, ''), carrier),
+                    carrier_name=COALESCE(NULLIF(?, ''), carrier_name),
+                    platform=CASE WHEN platform = '' THEN ? ELSE platform END,
+                    status=?,
+                    status_text=COALESCE(NULLIF(?, ''), status_text),
+                    pickup_code=COALESCE(NULLIF(?, ''), pickup_code),
+                    location=COALESCE(NULLIF(?, ''), location),
+                    last_event_at=?,
+                    order_id=COALESCE(?, order_id),
+                    updated_at=?
+                WHERE tracking_no=?
+                """,
+                (
+                    carrier or "",
+                    carrier_name or "",
+                    (platform or "").lower(),
+                    effective_status,
+                    status_text or "",
+                    pickup_code or "",
+                    location or "",
+                    event_at,
+                    order_id,
+                    now,
+                    tracking_no,
+                ),
+            )
     row = conn.execute(
         "SELECT rowid AS rid FROM shipments WHERE tracking_no=?", (tracking_no,)
     ).fetchone()
     return int(row["rid"]), changed
+
+
+def update_order_status(
+    conn: sqlite3.Connection,
+    *,
+    status: str,
+    status_text: str = "",
+    order_id: int | None = None,
+    platform: str | None = None,
+    platform_order_id: str | None = None,
+    tracking_no: str | None = None,
+) -> int | None:
+    """Update an order's status (used for refunds, which are not parcel states)."""
+    row = None
+    if order_id is not None:
+        row = conn.execute("SELECT id FROM orders WHERE id=?", (order_id,)).fetchone()
+    elif platform and platform_order_id:
+        row = conn.execute(
+            "SELECT id FROM orders WHERE platform=? AND platform_order_id=?",
+            (platform, platform_order_id),
+        ).fetchone()
+    elif tracking_no:
+        row = conn.execute(
+            "SELECT id FROM orders WHERE tracking_no=? ORDER BY id DESC LIMIT 1",
+            (tracking_no.upper(),),
+        ).fetchone()
+    if row is None:
+        return None
+    target_id = int(row["id"])
+    conn.execute(
+        "UPDATE orders SET status=?, status_text=?, updated_at=? WHERE id=?",
+        (status, status_text or "", utc_now(), target_id),
+    )
+    order = conn.execute("SELECT * FROM orders WHERE id=?", (target_id,)).fetchone()
+    if order:
+        _fts_insert(
+            conn,
+            doc_type="order",
+            doc_id=str(target_id),
+            title=order["title"] or "",
+            body=" ".join(
+                part
+                for part in (
+                    order["shop"],
+                    status_text,
+                    order["tracking_no"],
+                    order["platform"],
+                )
+                if part
+            ),
+            platform=order["platform"],
+            occurred_at=order["order_time"],
+        )
+    return target_id
 
 
 def add_parcel_event(

@@ -15,15 +15,27 @@ class SmsParserTest(unittest.TestCase):
         self.assertEqual(parsed.status, "ready_for_pickup")
         self.assertEqual(parsed.pickup_code, "8-2-1234")
         self.assertIn("菜鸟驿站", parsed.location)
+        self.assertEqual(parsed.platform, "")
 
-    def test_cainiao(self):
+    def test_cainiao_is_logistics_not_platform(self):
         parsed = parse_sms(
             "【菜鸟驿站】您的圆通包裹已到菜鸟驿站，取件码 5-1-2088，请凭取件码取件。"
         )
-        self.assertEqual(parsed.platform, "taobao")
+        self.assertEqual(parsed.platform, "")
         self.assertEqual(parsed.carrier, "yto")
         self.assertEqual(parsed.status, "ready_for_pickup")
         self.assertEqual(parsed.pickup_code, "5-1-2088")
+
+    def test_sender_brand_wins_over_location(self):
+        parsed = parse_sms(
+            "您的快件 SF1234567890123 已存放至菜鸟驿站，取件码 1234。",
+            sender="京东",
+        )
+        self.assertEqual(parsed.platform, "jd")
+
+    def test_taobao_brand(self):
+        parsed = parse_sms("【淘宝】您的订单已发货，运单号 YT9876543210123。")
+        self.assertEqual(parsed.platform, "taobao")
 
     def test_jd_shipped(self):
         parsed = parse_sms(
@@ -33,6 +45,11 @@ class SmsParserTest(unittest.TestCase):
         self.assertEqual(parsed.carrier, "jd")
         self.assertEqual(parsed.tracking_no, "JD0123456789012")
         self.assertEqual(parsed.status, "in_transit")
+
+    def test_jd_logistics_is_not_platform(self):
+        parsed = parse_sms("【京东物流】您的快件 JD0123456789012 正在派送中。")
+        self.assertEqual(parsed.platform, "")
+        self.assertEqual(parsed.carrier, "jd")
 
     def test_douyin(self):
         parsed = parse_sms(
@@ -76,6 +93,25 @@ class SmsParserTest(unittest.TestCase):
         )
         self.assertEqual(parsed.order_id, "123456789012")
         self.assertEqual(parsed.tracking_no, "JD0123456789012")
+
+    def test_numeric_tracking_requires_carrier_context(self):
+        parsed = parse_sms("【中通快递】78123456789012 已到阳光花园驿站，请及时取件。")
+        self.assertEqual(parsed.tracking_no, "78123456789012")
+        self.assertEqual(parsed.carrier, "zto")
+
+    def test_bare_numeric_order_id_is_not_tracking(self):
+        parsed = parse_sms(
+            "您的订单 123456789012345 已发货，运单号 YT9876543210123，请注意查收。"
+        )
+        self.assertEqual(parsed.tracking_no, "YT9876543210123")
+        self.assertNotIn("123456789012345", parsed.tracking_numbers)
+
+    def test_order_id_after_phone_is_not_tracking(self):
+        parsed = parse_sms(
+            "快递员电话 13800138000，订单号 123456789012，正在派送中。"
+        )
+        self.assertEqual(parsed.tracking_no, "")
+        self.assertEqual(parsed.status, "out_for_delivery")
 
     def test_multiple_tracking_numbers(self):
         parsed = parse_sms(

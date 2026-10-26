@@ -251,8 +251,6 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif path == "/api/stats":
                 self._json(HTTPStatus.OK, {"ok": True, **_public_config(), **db.stats(conn)})
-            elif path == "/api/collectors/runs":
-                self._json(HTTPStatus.OK, {"ok": True, "items": db.stats(conn)["collector_runs"]})
             elif path == "/api/export":
                 self._json(
                     HTTPStatus.OK,
@@ -443,7 +441,6 @@ def _poll_thread() -> None:
     try:
         with session() as conn:
             result = poll_parcels(conn)
-            conn.commit()
             log.info("Manual parcel poll: %s", result)
     except Exception:  # pragma: no cover
         log.exception("Manual parcel poll failed")
@@ -451,10 +448,16 @@ def _poll_thread() -> None:
 
 def serve() -> None:
     db.init_db()
-    if config.HOST not in {"127.0.0.1", "localhost", "::1"} and not config.TOKEN:
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    if config.HOST not in loopback and not config.TOKEN:
+        raise SystemExit(
+            "ORDERHUB_TOKEN is required when ORDERHUB_HOST is not loopback. "
+            "Set a long random token in .env, or bind to 127.0.0.1."
+        )
+    if not config.TOKEN:
         log.warning(
-            "ORDERHUB_TOKEN is empty while binding to %s; set a token before exposing this server",
-            config.HOST,
+            "ORDERHUB_TOKEN is empty; this is only safe for loopback access. "
+            "Set a token before using Tailscale Serve or LAN access."
         )
     httpd = ThreadingHTTPServer((config.HOST, config.PORT), Handler)
     httpd.daemon_threads = True

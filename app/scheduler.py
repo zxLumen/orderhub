@@ -20,7 +20,6 @@ class Scheduler:
     def __init__(self) -> None:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._parcel_lock = threading.Lock()
         self._jd_lock = threading.Lock()
         self._next_parcel = time.time() + 60
         self._next_jd = time.time() + 180
@@ -56,17 +55,12 @@ class Scheduler:
             self._stop.wait(15)
 
     def _run_parcel(self) -> None:
-        if not self._parcel_lock.acquire(blocking=False):
-            return
         try:
             with session() as conn:
                 result = poll_parcels(conn)
-                conn.commit()
             log.info("Scheduled parcel poll: %s", result)
         except Exception:
             log.exception("Scheduled parcel poll failed")
-        finally:
-            self._parcel_lock.release()
 
     def _run_jd(self) -> None:
         if not self._jd_lock.acquire(blocking=False):

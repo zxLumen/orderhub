@@ -74,14 +74,35 @@ def _normalize(row: dict[str, Any], default_platform: str | None) -> dict[str, A
     }
 
 
+def _extract_orders(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        result: list[dict[str, Any]] = []
+        for item in value:
+            result.extend(_extract_orders(item))
+        return result
+    if isinstance(value, dict):
+        for key in ("orders", "items", "data", "list", "records"):
+            if key in value:
+                nested = _extract_orders(value[key])
+                if nested:
+                    return nested
+        # A single order object is also valid.
+        if any(key in value for key in ("title", "order_id", "platform_order_id", "platform")):
+            return [value]
+    return []
+
+
 def load(path: Path) -> list[dict[str, Any]]:
     if path.suffix.lower() in {".json", ".jsonl"}:
         if path.suffix.lower() == ".jsonl":
-            return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            data = data.get("orders") or data.get("items") or data.get("data") or []
-        return [item for item in data if isinstance(item, dict)]
+            return [
+                item
+                for line in path.read_text(encoding="utf-8-sig").splitlines()
+                if line.strip()
+                for item in _extract_orders(json.loads(line))
+            ]
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        return _extract_orders(data)
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
 

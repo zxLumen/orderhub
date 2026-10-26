@@ -65,15 +65,44 @@ class DatabaseTest(unittest.TestCase):
         self.assertFalse(second["created"])
         self.assertEqual(db.stats(self.conn)["sms"], 1)
 
-    def test_shipment_status_does_not_downgrade(self):
-        db.upsert_shipment(self.conn, tracking_no="SF1", carrier="sf", status="delivered")
+    def test_stale_event_does_not_downgrade(self):
+        db.upsert_shipment(
+            self.conn,
+            tracking_no="SF1",
+            carrier="sf",
+            status="delivered",
+            last_event_at="2026-10-26T10:00:00+00:00",
+        )
         _, changed = db.upsert_shipment(
-            self.conn, tracking_no="SF1", carrier="sf", status="in_transit"
+            self.conn,
+            tracking_no="SF1",
+            carrier="sf",
+            status="in_transit",
+            last_event_at="2026-10-26T09:00:00+00:00",
         )
         self.conn.commit()
         self.assertFalse(changed)
         row = db.get_shipment(self.conn, "SF1")
         self.assertEqual(row["status"], "delivered")
+
+    def test_newer_event_can_correct_status(self):
+        db.upsert_shipment(
+            self.conn,
+            tracking_no="SF2",
+            carrier="sf",
+            status="returned",
+            last_event_at="2026-10-26T09:00:00+00:00",
+        )
+        _, changed = db.upsert_shipment(
+            self.conn,
+            tracking_no="SF2",
+            carrier="sf",
+            status="delivered",
+            last_event_at="2026-10-26T10:00:00+00:00",
+        )
+        self.conn.commit()
+        self.assertTrue(changed)
+        self.assertEqual(db.get_shipment(self.conn, "SF2")["status"], "delivered")
 
     def test_search_does_not_match_single_character_noise(self):
         db.upsert_order(
@@ -118,6 +147,32 @@ class DatabaseTest(unittest.TestCase):
         results = db.search(self.conn, "蓝牙耳机")
         self.assertTrue(results)
         self.assertEqual(results[0]["doc_type"], "capture")
+
+    def test_refund_updates_order_not_shipment(self):
+        db.upsert_order(
+            self.conn,
+            platform="jd",
+            platform_order_id="R123456",
+            title="测试商品",
+            tracking_no="JD0123456789012",
+        )
+        db.upsert_shipment(
+            self.conn,
+            tracking_no="JD0123456789012",
+            carrier="jd",
+            platform="jd",
+            status="delivered",
+            last_event_at="2026-10-26T10:00:00+00:00",
+        )
+        ingest_sms(
+            self.conn,
+            text="【京东】订单号：R123456 退款成功，退款将原路退回。",
+            received_at="2026-10-26T11:00:00+00:00",
+        )
+        self.conn.commit()
+        order = db.list_orders(self.conn, limit=10)[0]
+        self.assertEqual(order["status"], "refunded")
+        self.assertEqual(db.get_shipment(self.conn, "JD0123456789012")["status"], "delivered")
 
     def test_alert_created(self):
         ingest_sms(

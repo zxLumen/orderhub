@@ -32,6 +32,58 @@ CAPTCHA_HINTS = ("安全验证", "滑块", "请完成验证", "拖动滑块", "�
 LOGIN_HINTS = ("请登录", "登录京东", "账户登录")
 
 
+def _page_state(page: Any) -> tuple[bool, bool]:
+    url = (page.url or "").lower()
+    body = page.inner_text("body")[:20_000]
+    captcha = any(hint in body for hint in CAPTCHA_HINTS) or "risk" in url
+    login_required = (
+        "passport.jd.com" in url
+        or "login.jd.com" in url
+        or (any(hint in body for hint in LOGIN_HINTS) and "我的订单" not in body)
+    )
+    return captcha, login_required
+
+
+def _scroll_to_bottom(page: Any) -> None:
+    stable = 0
+    last_height = -1
+    for _ in range(config.JD_MAX_SCROLLS):
+        height = page.evaluate(
+            "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+        )
+        page.mouse.wheel(0, 2500)
+        page.wait_for_timeout(850)
+        new_height = page.evaluate(
+            "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+        )
+        if new_height == height or new_height == last_height:
+            stable += 1
+            if stable >= 2:
+                break
+        else:
+            stable = 0
+        last_height = new_height
+
+
+def _next_page(page: Any) -> bool:
+    for selector in (
+        "a:has-text('下一页')",
+        "button:has-text('下一页')",
+        ".pn-next",
+        "a.next",
+    ):
+        try:
+            locator = page.locator(selector).first
+            if locator.count() == 0 or not locator.is_visible() or not locator.is_enabled():
+                continue
+            locator.click(timeout=5_000)
+            page.wait_for_timeout(2_500)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _debug_dump(page: Any, prefix: str) -> tuple[str, str]:
     config.DEBUG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -82,19 +134,7 @@ def _collect_jd_impl() -> dict[str, Any]:
             page.goto(config.JD_ORDER_URL, wait_until="domcontentloaded", timeout=60_000)
             page.wait_for_timeout(2_500)
 
-            # Lazy-loaded order cards.
-            for _ in range(3):
-                page.mouse.wheel(0, 2200)
-                page.wait_for_timeout(900)
-
-            url = (page.url or "").lower()
-            body = page.inner_text("body")[:20_000]
-            captcha = any(hint in body for hint in CAPTCHA_HINTS) or "risk" in url
-            login_required = (
-                "passport.jd.com" in url
-                or "login.jd.com" in url
-                or (any(hint in body for hint in LOGIN_HINTS) and "我的订单" not in body)
-            )
+            captcha, login_required = _page_state(page)
 
             if captcha:
                 html_path, png_path = _debug_dump(page, "jd-captcha")
@@ -128,8 +168,28 @@ def _collect_jd_impl() -> dict[str, Any]:
                 bark.send("京东登录已失效", "打开 Chrome 扫码登录京东。")
                 return {"ok": False, "error": "login_required"}
 
-            html = page.content()
-            orders = parse_jd_orders(html)
+            collected: dict[str, dict[str, Any]] = {}
+            pages = 0
+            for page_index in range(config.JD_MAX_PAGES):
+                _scroll_to_bottom(page)
+                parsed_orders = parse_jd_orders(page.content())
+                pages += 1
+                for order in parsed_orders:
+                    key = (
+                        order.get("platform_order_id")
+                        or f"{order.get('title')}|{order.get('amount')}|{order.get('order_time')}"
+                    )
+                    collected[key] = order
+
+                if page_index + 1 >= config.JD_MAX_PAGES:
+                    break
+                if not _next_page(page):
+                    break
+                captcha, login_required = _page_state(page)
+                if captcha or login_required:
+                    break
+
+            orders = list(collected.values())
             if not orders:
                 _debug_dump(page, "jd-empty")
 
@@ -141,10 +201,13 @@ def _collect_jd_impl() -> dict[str, Any]:
                     run_id,
                     status="ok" if orders else "empty",
                     items=len(orders),
-                    message=f"{len(orders)} orders in {time.time() - started:.1f}s",
+                    message=(
+                        f"{len(orders)} orders across {pages} page(s) "
+                        f"in {time.time() - started:.1f}s"
+                    ),
                 )
-            log.info("JD collection: %s orders", len(orders))
-            return {"ok": True, "items": len(orders)}
+            log.info("JD collection: %s orders across %s pages", len(orders), pages)
+            return {"ok": True, "items": len(orders), "pages": pages}
     except Exception as exc:  # pragma: no cover - network/browser failures
         log.exception("JD collector failed")
         with session() as conn:

@@ -3,6 +3,7 @@ setlocal
 set "PROFILE=%~dp0..\data\chrome-profile"
 set "CHROME=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
 if not exist "%CHROME%" set "CHROME=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+if not exist "%CHROME%" set "CHROME=%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"
 if not exist "%CHROME%" (
   echo Chrome not found. Install Google Chrome first.
   exit /b 1

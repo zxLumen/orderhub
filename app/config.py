@@ -40,12 +40,20 @@ def _bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-DATA_DIR = Path(os.environ.get("ORDERHUB_DATA_DIR", str(BASE_DIR / "data"))).expanduser()
-DB_PATH = Path(os.environ.get("ORDERHUB_DB", str(DATA_DIR / "orderhub.db"))).expanduser()
-WEB_DIR = Path(os.environ.get("ORDERHUB_WEB_DIR", str(BASE_DIR / "web"))).expanduser()
+def resolve_path(value: str | Path | None, default: Path) -> Path:
+    """Resolve relative paths against the project root, never the process CWD."""
+    path = Path(value).expanduser() if value else default
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return path.resolve()
+
+
+DATA_DIR = resolve_path(os.environ.get("ORDERHUB_DATA_DIR"), BASE_DIR / "data")
+DB_PATH = resolve_path(os.environ.get("ORDERHUB_DB"), DATA_DIR / "orderhub.db")
+WEB_DIR = resolve_path(os.environ.get("ORDERHUB_WEB_DIR"), BASE_DIR / "web")
 DEBUG_DIR = DATA_DIR / "debug"
 
-HOST = os.environ.get("ORDERHUB_HOST", "0.0.0.0")
+HOST = os.environ.get("ORDERHUB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ORDERHUB_PORT", "8000"))
 TOKEN = os.environ.get("ORDERHUB_TOKEN", "").strip()
 
@@ -62,6 +70,8 @@ JD_ORDER_URL = os.environ.get(
     "JD_ORDER_URL", "https://order.jd.com/center/list.action"
 ).strip()
 JD_INTERVAL_SECONDS = int(os.environ.get("JD_INTERVAL_SECONDS", "21600"))
+JD_MAX_PAGES = max(1, int(os.environ.get("JD_MAX_PAGES", "3")))
+JD_MAX_SCROLLS = max(1, int(os.environ.get("JD_MAX_SCROLLS", "8")))
 PARCEL_POLL_SECONDS = int(os.environ.get("PARCEL_POLL_SECONDS", "1800"))
 
 # Keep a sane upper bound on request bodies (screenshots are sent as text).

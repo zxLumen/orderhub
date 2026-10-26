@@ -13,9 +13,11 @@ from ..db import (
     add_alert,
     add_parcel_event,
     list_shipments,
+    normalize_time,
     record_capture,
     record_sms,
     session,
+    update_order_status,
     upsert_shipment,
 )
 from ..parsers.sms import parse_sms
@@ -74,6 +76,73 @@ def _link_order(
     return order_id
 
 
+def _resolve_order_id(
+    conn: sqlite3.Connection,
+    *,
+    platform: str,
+    order_id_text: str,
+    tracking_no: str = "",
+) -> int | None:
+    if order_id_text:
+        if platform:
+            row = conn.execute(
+                "SELECT id FROM orders WHERE platform=? AND platform_order_id=?",
+                (platform, order_id_text),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM orders WHERE platform_order_id=? ORDER BY id DESC LIMIT 1",
+                (order_id_text,),
+            ).fetchone()
+        if row:
+            return int(row["id"])
+    if tracking_no:
+        row = conn.execute(
+            "SELECT id FROM orders WHERE tracking_no=? ORDER BY id DESC LIMIT 1",
+            (tracking_no.upper(),),
+        ).fetchone()
+        if row:
+            return int(row["id"])
+    return None
+
+
+def _handle_refund(
+    conn: sqlite3.Connection,
+    *,
+    parsed: Any,
+    text: str,
+    occurred_at: str,
+    tracking_no: str = "",
+) -> dict[str, Any] | None:
+    """Refunds are order-level; never turn a parcel into 'refunded'."""
+    order_id = _resolve_order_id(
+        conn,
+        platform=parsed.platform,
+        order_id_text=parsed.order_id,
+        tracking_no=tracking_no or parsed.tracking_no,
+    )
+    if order_id is not None:
+        update_order_status(
+            conn,
+            order_id=order_id,
+            status="refunded",
+            status_text="已退款",
+        )
+    if tracking_no or parsed.tracking_no:
+        add_parcel_event(
+            conn,
+            tracking_no=tracking_no or parsed.tracking_no,
+            event_time=occurred_at,
+            context=text[:1000],
+            status="refunded",
+            source="sms",
+        )
+    title = "退款成功"
+    body = f"{parsed.carrier_name or '订单'} · {parsed.order_id or parsed.tracking_no or ''}".strip(" ·")
+    _notify(conn, kind="order_refunded", title=title, body=body)
+    return {"title": title, "body": body, "order_id": order_id}
+
+
 def _notify(conn: sqlite3.Connection, *, kind: str, title: str, body: str, url: str | None = None) -> None:
     add_alert(conn, kind=kind, title=title, body=body)
     if not config.BARK_URL:
@@ -109,6 +178,17 @@ def ingest_sms(
         return result
 
     occurred_at = received_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if parsed.status == "refunded":
+        alert = _handle_refund(
+            conn,
+            parsed=parsed,
+            text=text,
+            occurred_at=occurred_at,
+        )
+        if alert:
+            result["alerts"].append(alert)
+        return result
+
     for tracking_no in parsed.tracking_numbers or ([parsed.tracking_no] if parsed.tracking_no else []):
         _, changed = upsert_shipment(
             conn,
@@ -191,8 +271,18 @@ def ingest_capture(
     # pull a tracking number / status out of the OCR text.
     parsed = parse_sms(text, platform)
     result["parsed"] = parsed.as_dict()
+    occurred_at = captured_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if parsed.status == "refunded":
+        alert = _handle_refund(
+            conn,
+            parsed=parsed,
+            text=text,
+            occurred_at=occurred_at,
+        )
+        if alert:
+            result["alerts"] = [alert]
+        return result
     if parsed.tracking_numbers:
-        occurred_at = captured_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
         for tracking_no in parsed.tracking_numbers:
             _, changed = upsert_shipment(
                 conn,
@@ -224,7 +314,20 @@ def ingest_capture(
     return result
 
 
+_POLL_LOCK = threading.Lock()
+
+
 def poll_parcels(conn: sqlite3.Connection, *, limit: int = 20) -> dict[str, Any]:
+    """Single-flight wrapper shared by the API and the scheduler."""
+    if not _POLL_LOCK.acquire(blocking=False):
+        return {"ok": False, "error": "already_running", "checked": 0, "updated": 0}
+    try:
+        return _poll_parcels_impl(conn, limit=limit)
+    finally:
+        _POLL_LOCK.release()
+
+
+def _poll_parcels_impl(conn: sqlite3.Connection, *, limit: int = 20) -> dict[str, Any]:
     """Refresh active shipments via Kuaidi100. Safe to call when unconfigured."""
     if not kuaidi100.configured():
         return {"ok": False, "error": "not_configured", "checked": 0, "updated": 0}
@@ -247,8 +350,10 @@ def poll_parcels(conn: sqlite3.Connection, *, limit: int = 20) -> dict[str, Any]
             errors.append(f"{tracking_no}: {result.get('error')}")
             continue
         new_status = result.get("state") or "unknown"
-        old_status = shipment.get("status") or "unknown"
-        changed = new_status != old_status
+        events = result.get("events") or []
+        event_times = [normalize_time(event.get("time")) for event in events if event.get("time")]
+        latest_event_at = max((value for value in event_times if value), default=None)
+        latest_event_at = latest_event_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
         _, status_changed = upsert_shipment(
             conn,
             tracking_no=tracking_no,
@@ -257,10 +362,10 @@ def poll_parcels(conn: sqlite3.Connection, *, limit: int = 20) -> dict[str, Any]
             platform=shipment.get("platform") or "",
             status=new_status,
             status_text=status_label(new_status),
-            last_event_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            last_event_at=latest_event_at,
         )
         added = 0
-        for event in result.get("events") or []:
+        for event in events:
             if add_parcel_event(
                 conn,
                 tracking_no=tracking_no,
@@ -280,7 +385,7 @@ def poll_parcels(conn: sqlite3.Connection, *, limit: int = 20) -> dict[str, Any]
                 title=f"{status_label(new_status)} · {shipment.get('carrier_name') or '包裹'}",
                 body=" · ".join(body_parts),
             )
-        if changed or added:
+        if status_changed or added:
             updated += 1
     return {"ok": True, "checked": checked, "updated": updated, "errors": errors[:5]}
 
