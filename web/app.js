@@ -336,6 +336,7 @@
       ["登录", config.login_required ? "密码" : (config.auth_required ? "Token" : "未设置"), config.auth_required ? "ok" : "warn"],
       ["采集器", collectorText, collectorOnline ? "ok" : "warn"],
       ["快递100", config.kuaidi100_configured ? "已配置" : "未配置", config.kuaidi100_configured ? "ok" : "off"],
+      ["Web Push", config.webpush_configured ? "已配置" : "未配置", config.webpush_configured ? "ok" : "off"],
       ["后台调度", config.scheduler_enabled ? "运行中" : "关闭", config.scheduler_enabled ? "ok" : "off"],
       ["数据存储", "服务器 SQLite", "ok"],
     ];
@@ -554,6 +555,84 @@
   // ------------------------------------------------------------------
   // Actions
   // ------------------------------------------------------------------
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(base64);
+    const output = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
+    return output;
+  }
+
+  async function updatePushStatus() {
+    const label = $("#pushState");
+    if (!label) return;
+    if (!state.config?.webpush_configured || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      label.textContent = state.config?.webpush_configured ? "当前浏览器不支持" : "服务端未配置";
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      label.textContent = subscription ? "已开启" : (Notification.permission === "denied" ? "已拒绝" : "未开启");
+    } catch (_) {
+      label.textContent = "检查失败";
+    }
+  }
+
+  async function enablePush() {
+    if (!state.config?.webpush_configured) return toast("服务端未配置 VAPID 密钥");
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      return toast("当前浏览器不支持 Web Push");
+    }
+    if (window.navigator.standalone === false && /iPhone|iPad/.test(navigator.userAgent)) {
+      return toast("iPhone 请先添加到主屏幕，再从主屏幕打开");
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") return toast("通知权限未开启");
+      const registration = await navigator.serviceWorker.ready;
+      const data = await api("/api/push/public-key");
+      if (!data.public_key) return toast("服务端未配置 VAPID 公钥");
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(data.public_key),
+      });
+      await api("/api/push/subscribe", {
+        method: "POST",
+        body: JSON.stringify({ subscription: subscription.toJSON() }),
+      });
+      toast("通知已开启");
+      updatePushStatus();
+    } catch (error) {
+      toast(error.message || "开启通知失败");
+    }
+  }
+
+  async function disablePush() {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await api("/api/push/unsubscribe", {
+          method: "POST",
+          body: JSON.stringify({ endpoint: subscription.endpoint }),
+        });
+        await subscription.unsubscribe();
+      }
+      toast("通知已关闭");
+      updatePushStatus();
+    } catch (error) { toast(error.message); }
+  }
+
+  async function testPush() {
+    try {
+      const data = await api("/api/push/test", { method: "POST", body: "{}" });
+      const result = data.result || {};
+      toast(`已发送：成功 ${result.ok || 0}，失败 ${result.error || 0}`);
+    } catch (error) { toast(error.message); }
+  }
+
   async function pollParcels() {
     if (!state.config?.kuaidi100_configured) {
       toast("先配置 KUAIDI100_CUSTOMER / KEY");
@@ -755,6 +834,9 @@
     document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeSheet(); });
 
     $("#pollParcelsBtn").addEventListener("click", pollParcels);
+    $("#enablePushBtn").addEventListener("click", enablePush);
+    $("#disablePushBtn").addEventListener("click", disablePush);
+    $("#testPushBtn").addEventListener("click", testPush);
     $("#collectJdBtn").addEventListener("click", collectJd);
     $("#collectJdFullBtn").addEventListener("click", collectJdFull);
     $("#manualAddBtn").addEventListener("click", openManualForm);
@@ -777,6 +859,7 @@
     } else {
       await loadDashboard();
     }
+    updatePushStatus();
     if ("serviceWorker" in navigator) {
       const hadController = Boolean(navigator.serviceWorker.controller);
       let reloading = false;

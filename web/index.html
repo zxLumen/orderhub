@@ -90,6 +90,16 @@
         </div>
 
         <div class="panel">
+          <div class="panel-head"><h2>系统通知</h2><span class="muted" id="pushState">检查中…</span></div>
+          <p class="muted small">浏览器 Web Push，不需要 Bark。iPhone 需先添加到主屏幕，iOS 16.4+。</p>
+          <div class="button-row">
+            <button class="btn" id="enablePushBtn">开启通知</button>
+            <button class="btn ghost" id="disablePushBtn">关闭</button>
+            <button class="btn ghost" id="testPushBtn">发测试通知</button>
+          </div>
+        </div>
+
+        <div class="panel">
           <div class="panel-head"><h2>采集记录</h2><span class="muted">验证码频率</span></div>
           <div id="runsList" class="runs"></div>
         </div>

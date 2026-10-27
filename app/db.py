@@ -242,6 +242,15 @@ CREATE TABLE IF NOT EXISTS collector_workers (
     message TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS search_docs (
     tokens TEXT NOT NULL,
     doc_type TEXT NOT NULL,
@@ -822,6 +831,42 @@ def finish_command(
         "UPDATE collector_commands SET status=?, finished_at=?, message=? WHERE id=?",
         (status, utc_now(), message[:2000], command_id),
     )
+
+
+def upsert_push_subscription(
+    conn: sqlite3.Connection,
+    *,
+    endpoint: str,
+    p256dh: str,
+    auth: str,
+    user_agent: str = "",
+) -> None:
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT INTO push_subscriptions(endpoint, p256dh, auth, user_agent, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(endpoint) DO UPDATE SET
+            p256dh=excluded.p256dh,
+            auth=excluded.auth,
+            user_agent=excluded.user_agent,
+            updated_at=excluded.updated_at
+        """,
+        (endpoint, p256dh, auth, user_agent[:300], now, now),
+    )
+
+
+def delete_push_subscription(conn: sqlite3.Connection, endpoint: str) -> None:
+    conn.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (endpoint,))
+
+
+def list_push_subscriptions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM push_subscriptions ORDER BY updated_at DESC"
+        ).fetchall()
+    ]
 
 
 def list_commands(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str, Any]]:

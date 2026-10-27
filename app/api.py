@@ -19,6 +19,7 @@ from typing import Any
 from . import auth, config, db
 from .collectors.jd import normalize_mode
 from .db import session, utc_now
+from .services import notifier, webpush
 from .services.ingest import ingest_capture, ingest_sms, poll_parcels
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ def _public_config() -> dict[str, Any]:
         "auth_required": bool(config.TOKEN or config.PASSWORD_HASH),
         "login_required": bool(config.PASSWORD_HASH),
         "kuaidi100_configured": bool(config.KUAIDI100_CUSTOMER and config.KUAIDI100_KEY),
-        "bark_configured": bool(config.BARK_URL),
+        "webpush_configured": webpush.configured(),
         "jd_collector_enabled": config.ENABLE_JD_COLLECTOR,
         "scheduler_enabled": config.ENABLE_SCHEDULER,
         "jd_cdp_url": config.JD_CDP_URL if config.ENABLE_JD_COLLECTOR else "",
@@ -317,6 +318,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             self._json(HTTPStatus.OK, {"ok": True, **_public_config()})
             return
+        if path == "/api/push/public-key":
+            self._json(
+                HTTPStatus.OK,
+                {"ok": True, "enabled": webpush.configured(), "public_key": webpush.public_key()},
+            )
+            return
 
         with session() as conn:
             if path == "/api/orders":
@@ -504,6 +511,46 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/push/subscribe":
+            subscription = payload.get("subscription") if isinstance(payload.get("subscription"), dict) else payload
+            endpoint = str(subscription.get("endpoint") or "").strip()
+            keys = subscription.get("keys") if isinstance(subscription.get("keys"), dict) else {}
+            p256dh = str(keys.get("p256dh") or "").strip()
+            auth_key = str(keys.get("auth") or "").strip()
+            if not endpoint or not p256dh or not auth_key:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid subscription")
+            with session() as conn:
+                db.upsert_push_subscription(
+                    conn,
+                    endpoint=endpoint,
+                    p256dh=p256dh,
+                    auth=auth_key,
+                    user_agent=self.headers.get("User-Agent", ""),
+                )
+            self._json(HTTPStatus.OK, {"ok": True})
+            return
+
+        if path == "/api/push/unsubscribe":
+            endpoint = str(payload.get("endpoint") or "").strip()
+            if not endpoint:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "endpoint required")
+            with session() as conn:
+                db.delete_push_subscription(conn, endpoint)
+            self._json(HTTPStatus.OK, {"ok": True})
+            return
+
+        if path == "/api/push/test":
+            if not webpush.configured():
+                raise ApiError(HTTPStatus.BAD_REQUEST, "webpush_not_configured")
+            with session() as conn:
+                result = webpush.send_all(
+                    conn,
+                    title="OrderHub 测试通知",
+                    body="如果你看到这条，Web Push 已经通了。",
+                )
+            self._json(HTTPStatus.OK, {"ok": True, "result": result})
+            return
+
         if path == "/api/collector/heartbeat":
             with session() as conn:
                 db.heartbeat_worker(
@@ -659,12 +706,11 @@ def _ingest_remote(conn: Any, payload: dict[str, Any]) -> dict[str, Any]:
     for alert in alerts:
         if not isinstance(alert, dict):
             continue
-        db.add_alert(
+        notifier.notify(
             conn,
             kind=str(alert.get("kind") or "collector"),
             title=str(alert.get("title") or "采集提醒"),
             body=str(alert.get("body") or ""),
-            created_at=alert.get("created_at"),
         )
         alert_count += 1
 

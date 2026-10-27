@@ -10,7 +10,6 @@ from typing import Any
 
 from .. import config
 from ..db import (
-    add_alert,
     add_parcel_event,
     list_shipments,
     normalize_time,
@@ -21,7 +20,7 @@ from ..db import (
     upsert_shipment,
 )
 from ..parsers.sms import parse_sms
-from . import bark, kuaidi100
+from . import kuaidi100, notifier
 
 log = logging.getLogger(__name__)
 
@@ -144,17 +143,7 @@ def _handle_refund(
 
 
 def _notify(conn: sqlite3.Connection, *, kind: str, title: str, body: str, url: str | None = None) -> None:
-    add_alert(conn, kind=kind, title=title, body=body)
-    if not config.BARK_URL:
-        return
-    # Never keep a SQLite write transaction open while talking to the network.
-    threading.Thread(
-        target=bark.send,
-        args=(title, body),
-        kwargs={"url": url},
-        daemon=True,
-        name="orderhub-bark",
-    ).start()
+    notifier.notify(conn, kind=kind, title=title, body=body, url=url)
 
 
 def ingest_sms(

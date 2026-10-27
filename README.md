@@ -7,7 +7,7 @@
 - 后端：Python 标准库（无需 pip 安装）
 - 前端：原生 PWA，iPhone 添加到主屏幕即可
 - 数据：SQLite + 中文二元分词全文索引
-- 推送：Bark
+- 推送：Web Push（浏览器原生，可选）
 - 物流：Kuaidi100（可选）
 - 采集：京东（可选，Playwright + 已登录的真实 Chrome）
 
@@ -22,7 +22,7 @@
 - 抖音抓屏入库：`POST /api/captures`
 - 手动补单：PWA → 更多 → 手动添加（美团外卖、抖音、任何漏掉的单）
 - 京东采集：CDP 接管真实 Chrome，记录验证码次数
-- Bark 推送：待取件、派送中、签收、外卖状态
+- Web Push：待取件、派送中、签收、外卖状态（需 VAPID 配置）
 - 自动对账基础：订单、包裹、短信统一存库
 - 导出：`/api/export`，JSON 备份
 - CSV/JSON 订单导入：`scripts/import_orders.py`
@@ -80,7 +80,7 @@ python -m app.collector_agent --sync-only
 - Python 3.11+（3.12 推荐）
 - Google Chrome
 - （可选）Tailscale：让 iPhone 在外网也能访问家里的 Windows
-- （可选）Bark：iPhone 推送
+- （可选）pywebpush：浏览器系统通知
 
 核心不需要任何第三方 Python 包。只有京东采集需要 Playwright：
 
@@ -98,12 +98,11 @@ copy .env.example .env
 notepad .env
 ```
 
-至少改这三项：
+至少改这两项：
 
 ```ini
 ORDERHUB_TOKEN=一串很长的随机字符串
 ORDERHUB_DATA_DIR=C:\OrderHub\data
-BARK_URL=https://api.day.app/你的key
 ```
 
 默认只监听 `127.0.0.1`，Tailscale Serve 会代理它。只有想用局域网 IP 直连时才改成：
@@ -233,17 +232,23 @@ curl -X POST http://127.0.0.1:8000/api/sms ^
 
 ---
 
-## Bark 推送
+## Web Push
 
-1. iPhone 安装 Bark
-2. 复制 App 里的 URL，例如 `https://api.day.app/xxxxxxxx`
-3. 写入 `.env`：
+不需要 Bark，使用浏览器原生推送。
 
-```ini
-BARK_URL=https://api.day.app/xxxxxxxx
+服务器安装可选依赖并生成 VAPID 密钥：
+
+```bash
+/opt/orderhub/.venv/bin/pip install -r /opt/orderhub/requirements-webpush.txt
+cd /opt/orderhub
+python scripts/make_vapid_keys.py
 ```
 
-不配置也能用，只是不推送。
+把输出的三行写进 `.env` / `/etc/orderhub.env`，重启服务。然后在 PWA「更多 → 系统通知」里开启。
+
+- iPhone 必须先把页面添加到主屏幕，iOS 16.4+
+- 桌面 Chrome / Safari 可直接开启
+- 没配置 VAPID 也能用，只是没有系统通知，应用内提醒仍然保留
 
 ---
 
@@ -264,7 +269,7 @@ KUAIDI100_PHONE=1234
 
 - 短信拿到运单号后，自动补全物流轨迹
 - 在途包裹每 30 分钟刷新
-- 状态变化推送 Bark
+- 状态变化推送 Web Push
 
 没有配置时，包裹只显示短信里的状态，不影响其他功能。
 
@@ -403,7 +408,7 @@ Authorization: Bearer <ORDERHUB_TOKEN>
 python -m unittest discover -v
 ```
 
-覆盖：短信解析（平台/运单号/状态）、去重、包裹状态按事件时间推进、退款只改订单、中文搜索、路径解析、JSON 导入、Bark payload、HTTP 鉴权/路径穿越/body 上限、京东 HTML/时间解析。
+覆盖：短信解析（平台/运单号/状态）、去重、包裹状态按事件时间推进、退款只改订单、中文搜索、路径解析、JSON 导入、Web Push 订阅、HTTP 鉴权/路径穿越/body 上限、京东 HTML/时间解析。
 
 ---
 
@@ -432,7 +437,8 @@ orderhub/
 │   ├── services/
 │   │   ├── ingest.py
 │   │   ├── kuaidi100.py
-│   │   └── bark.py
+│   │   ├── notifier.py
+│   │   └── webpush.py
 │   └── collectors/
 │       ├── jd.py
 │       ├── jd_parser.py

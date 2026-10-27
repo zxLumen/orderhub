@@ -70,11 +70,15 @@ LOGIN_RATE_WINDOW = int(os.environ.get("ORDERHUB_LOGIN_RATE_WINDOW", "900"))
 SERVER_URL = os.environ.get("ORDERHUB_SERVER_URL", "").strip().rstrip("/")
 COLLECTOR_TOKEN = os.environ.get("ORDERHUB_COLLECTOR_TOKEN", "").strip() or TOKEN
 
+# Web Push (browser native, no Bark)
+VAPID_PUBLIC_KEY = os.environ.get("ORDERHUB_VAPID_PUBLIC_KEY", "").strip()
+VAPID_PRIVATE_KEY = os.environ.get("ORDERHUB_VAPID_PRIVATE_KEY", "").strip()
+VAPID_SUBJECT = os.environ.get("ORDERHUB_VAPID_SUBJECT", "mailto:admin@example.com").strip()
+
 # Optional integrations
 KUAIDI100_CUSTOMER = os.environ.get("KUAIDI100_CUSTOMER", "").strip()
 KUAIDI100_KEY = os.environ.get("KUAIDI100_KEY", "").strip()
 KUAIDI100_PHONE = os.environ.get("KUAIDI100_PHONE", "").strip()
-BARK_URL = os.environ.get("BARK_URL", "").strip().rstrip("/")
 
 ENABLE_SCHEDULER = _bool("ENABLE_SCHEDULER", True)
 ENABLE_JD_COLLECTOR = _bool("ENABLE_JD_COLLECTOR", False)

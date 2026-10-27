@@ -247,6 +247,33 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(payload["commands"][0]["status"], "ok")
         self.assertTrue(payload["runs"])
 
+    def test_push_subscription(self):
+        status, payload, _ = self.request(
+            "POST",
+            "/api/push/subscribe",
+            {
+                "subscription": {
+                    "endpoint": "https://push.example.test/1",
+                    "keys": {"p256dh": "abc", "auth": "def"},
+                }
+            },
+            token="testtoken",
+        )
+        self.assertEqual(status, 200)
+        with db.session(config.DB_PATH) as conn:
+            self.assertEqual(len(db.list_push_subscriptions(conn)), 1)
+        status, _, _ = self.request(
+            "POST",
+            "/api/push/unsubscribe",
+            {"endpoint": "https://push.example.test/1"},
+            token="testtoken",
+        )
+        self.assertEqual(status, 200)
+        with db.session(config.DB_PATH) as conn:
+            self.assertEqual(len(db.list_push_subscriptions(conn)), 0)
+        status, _, _ = self.request("POST", "/api/push/test", {}, token="testtoken")
+        self.assertEqual(status, 400)
+
     def test_gzip_collector_body(self):
         body = gzip.compress(
             json.dumps(

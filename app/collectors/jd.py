@@ -18,13 +18,12 @@ from typing import Any, Iterator
 
 from .. import config
 from ..db import (
-    add_alert,
     finish_collector_run,
     session,
     start_collector_run,
     upsert_order,
 )
-from ..services import bark
+from ..services import notifier
 from .jd_parser import order_from_api, parse_jd_orders
 
 log = logging.getLogger(__name__)
@@ -351,13 +350,13 @@ def _collect_jd_impl(mode: str = MODE_RECENT) -> dict[str, Any]:
                         status="captcha",
                         message=f"需要人工验证: {html_path} {png_path}",
                     )
-                    add_alert(
+                    notifier.notify(
                         conn,
                         kind="collector_captcha",
                         title="京东需要验证码",
                         body="打开 Chrome 完成滑块后，下一次采集会自动恢复。",
+                        push=False,
                     )
-                bark.send("京东需要验证码", "打开 Chrome 完成滑块后自动恢复。")
                 return {"ok": False, "error": "captcha", "debug": html_path}
 
             if login_required:
@@ -365,13 +364,13 @@ def _collect_jd_impl(mode: str = MODE_RECENT) -> dict[str, Any]:
                     finish_collector_run(
                         conn, run_id, status="login_required", message="京东登录已失效"
                     )
-                    add_alert(
+                    notifier.notify(
                         conn,
                         kind="collector_login",
                         title="京东登录已失效",
                         body="打开 Chrome 扫码登录京东，下一次采集会自动恢复。",
+                        push=False,
                     )
-                bark.send("京东登录已失效", "打开 Chrome 扫码登录京东。")
                 return {"ok": False, "error": "login_required"}
 
             labels = _period_labels(page)
@@ -413,11 +412,12 @@ def _collect_jd_impl(mode: str = MODE_RECENT) -> dict[str, Any]:
 
             if stop_reason:
                 with session() as conn:
-                    add_alert(
+                    notifier.notify(
                         conn,
                         kind=f"collector_{stop_reason}",
                         title="京东需要人工处理",
                         body=f"采集在 {period_summary[-1] if period_summary else '中途'} 中断：{stop_reason}",
+                        push=False,
                     )
 
             with session() as conn:

@@ -34,12 +34,11 @@ def main() -> None:
             scheduler = Scheduler()
             scheduler.start()
         log.info(
-            "OrderHub %s | data=%s | auth=%s | kuaidi100=%s | bark=%s | jd=%s",
+            "OrderHub %s | data=%s | auth=%s | kuaidi100=%s | jd=%s",
             "0.1.0",
             config.DB_PATH,
             "on" if config.TOKEN else "off",
             "on" if config.KUAIDI100_CUSTOMER and config.KUAIDI100_KEY else "off",
-            "on" if config.BARK_URL else "off",
             "on" if config.ENABLE_JD_COLLECTOR else "off",
         )
         serve()
