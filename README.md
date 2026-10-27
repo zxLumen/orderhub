@@ -65,6 +65,12 @@ JD_CDP_URL=http://127.0.0.1:9333
 scripts\start_agent.bat
 ```
 
+如果服务器是新建的，想先把 Windows 本地历史订单上传一次：
+
+```bat
+python -m app.collector_agent --sync-only
+```
+
 `scripts\autostart.vbs` / `ensure_running.ps1` 现在只守护 Chrome 9333 和采集 agent，不再启动本地 Web。
 
 ## 快速开始（Windows 本地开发）

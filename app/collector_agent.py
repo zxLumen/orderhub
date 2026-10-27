@@ -276,12 +276,21 @@ class Agent:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--sync-only", action="store_true", help="upload local staging rows without collecting")
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    Agent().run(once=args.once)
+    agent = Agent()
+    if args.sync_only:
+        if not agent.server or not agent.token:
+            raise SystemExit("ORDERHUB_SERVER_URL and ORDERHUB_COLLECTOR_TOKEN are required")
+        db.init_db()
+        agent.heartbeat()
+        agent.sync()
+        return 0
+    agent.run(once=args.once)
     return 0
 
 

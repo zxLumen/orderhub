@@ -47,6 +47,12 @@ sudo systemctl status orderhub
 curl -s http://127.0.0.1:8000/api/health
 ```
 
+Get the API token for the Windows agent and iPhone Shortcut:
+
+```bash
+sudo grep '^ORDERHUB_TOKEN=' /etc/orderhub.env
+```
+
 ## 4. Caddy
 
 Copy `deploy/orderhub.caddy` into the existing Caddy sites directory:
