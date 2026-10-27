@@ -137,8 +137,15 @@ class Agent:
             order_rows = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT * FROM orders WHERE updated_at > ? ORDER BY updated_at ASC",
-                    (self.state.get("last_order_updated") or "",),
+                    "SELECT * FROM orders WHERE "
+                    "(COALESCE(updated_at, created_at, '') > ?) OR "
+                    "(COALESCE(updated_at, created_at, '') = ? AND id > ?) "
+                    "ORDER BY COALESCE(updated_at, created_at, '') ASC, id ASC",
+                    (
+                        self.state.get("last_order_updated") or "",
+                        self.state.get("last_order_updated") or "",
+                        int(self.state.get("last_order_id") or 0),
+                    ),
                 ).fetchall()
             ]
             run_rows = [
@@ -179,7 +186,10 @@ class Agent:
             self._request("POST", "/api/collector/ingest", payload)
 
             if chunk_orders:
-                self.state["last_order_updated"] = chunk_orders[-1]["updated_at"] or ""
+                self.state["last_order_updated"] = (
+                    chunk_orders[-1].get("updated_at") or chunk_orders[-1].get("created_at") or ""
+                )
+                self.state["last_order_id"] = chunk_orders[-1].get("id") or 0
             if first and run_rows:
                 self.state["last_run_id"] = run_rows[-1]["id"]
             if first and alert_rows:

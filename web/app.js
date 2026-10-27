@@ -843,6 +843,14 @@
     $("#exportBtn").addEventListener("click", exportData);
     $("#saveTokenBtn").addEventListener("click", () => saveTokenFrom($("#tokenInput").value));
     $("#clearTokenBtn").addEventListener("click", () => saveTokenFrom(""));
+    $("#logoutBtn").addEventListener("click", async () => {
+      try {
+        await fetch("/api/logout", { method: "POST" });
+      } finally {
+        localStorage.removeItem("orderhub_token");
+        location.href = "/login";
+      }
+    });
     $("#tokenModalSave").addEventListener("click", () => saveTokenFrom($("#tokenModalInput").value));
     $("#tokenModalInput").addEventListener("keydown", (event) => {
       if (event.key === "Enter") saveTokenFrom(event.target.value);
