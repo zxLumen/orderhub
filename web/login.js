@@ -28,7 +28,7 @@
         return;
       }
       const next = new URLSearchParams(location.search).get("next") || "/";
-      location.replace(next.startsWith("/") ? next : "/");
+      location.replace(next.startsWith("/") && !next.startsWith("//") ? next : "/");
     } catch (_) {
       showError("网络不可用，请稍后重试。");
     } finally {

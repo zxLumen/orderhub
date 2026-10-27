@@ -20,10 +20,11 @@ else
   git -C "$APP_DIR" pull --ff-only
 fi
 
+PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.org/simple}"
 python3 -m venv "$APP_DIR/.venv"
-"$APP_DIR/.venv/bin/pip" install --upgrade pip
+"$APP_DIR/.venv/bin/pip" install --upgrade pip -i "$PIP_INDEX_URL"
 if [ -f "$APP_DIR/requirements-webpush.txt" ]; then
-  "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements-webpush.txt"
+  "$APP_DIR/.venv/bin/pip" install -i "$PIP_INDEX_URL" -r "$APP_DIR/requirements-webpush.txt"
 fi
 
 if [ ! -f "$ENV_FILE" ]; then

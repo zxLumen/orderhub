@@ -38,6 +38,11 @@ Set at least:
 - `ORDERHUB_SESSION_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(48))"`)
 - `ORDERHUB_COOKIE_SECURE=1`
 - `ENABLE_JD_COLLECTOR=0`
+- `ORDERHUB_VAPID_PUBLIC_KEY` / `ORDERHUB_VAPID_PRIVATE_KEY` (optional Web Push):
+  ```bash
+  /opt/orderhub/.venv/bin/pip install -i https://pypi.org/simple -r /opt/orderhub/requirements-webpush.txt
+  /opt/orderhub/.venv/bin/python /opt/orderhub/scripts/make_vapid_keys.py
+  ```
 
 Then:
 

@@ -1,5 +1,5 @@
 /* OrderHub service worker: fresh shell when online, offline fallback. */
-const CACHE = "orderhub-v2";
+const CACHE = "orderhub-v3";
 const SHELL = new Set([
   "/",
   "/index.html",
