@@ -42,6 +42,7 @@ class Agent:
         self.state_path = config.DATA_DIR / STATE_FILE
         self._stop = threading.Event()
         self._last_heartbeat = 0.0
+        self._last_sync = 0.0
         self._last_schedule = 0.0
         self.state = self._load_state()
 
@@ -196,6 +197,7 @@ class Agent:
                 self.state["last_alert_id"] = alert_rows[-1]["id"]
             self._save_state()
 
+        self._last_sync = time.time()
         log.info(
             "synced orders=%s runs=%s alerts=%s",
             len(order_rows),
@@ -275,6 +277,11 @@ class Agent:
                 self.poll_command()
                 if time.time() - self._last_heartbeat > 30:
                     self.heartbeat()
+                if time.time() - self._last_sync > 60:
+                    try:
+                        self.sync()
+                    except Exception as exc:
+                        log.warning("periodic sync failed: %s", exc)
                 self._stop.wait(15)
             except KeyboardInterrupt:
                 break

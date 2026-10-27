@@ -4,7 +4,9 @@
 $ErrorActionPreference = "SilentlyContinue"
 
 $root = Split-Path -Parent $PSScriptRoot
-$logPath = Join-Path $root "data\autostart.log"
+$dataDir = Join-Path $root "data"
+if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory -Path $dataDir -Force | Out-Null }
+$logPath = Join-Path $dataDir "autostart.log"
 $cdpPort = 9333
 
 function Write-Log([string]$Message) {

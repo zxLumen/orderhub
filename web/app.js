@@ -567,7 +567,12 @@
   async function updatePushStatus() {
     const label = $("#pushState");
     if (!label) return;
-    if (!state.config?.webpush_configured || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    if (
+      !state.config?.webpush_configured ||
+      !("Notification" in window) ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window)
+    ) {
       label.textContent = state.config?.webpush_configured ? "当前浏览器不支持" : "服务端未配置";
       return;
     }
