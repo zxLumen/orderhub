@@ -6,6 +6,7 @@ Run once after upgrading:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -17,13 +18,16 @@ from app.services import tracking  # noqa: E402
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--all", action="store_true", help="re-process orders that already have a tracking number")
+    args = parser.parse_args()
     db.init_db()
     updated = 0
     with db.session() as conn:
-        rows = conn.execute(
-            "SELECT * FROM orders WHERE (tracking_no IS NULL OR tracking_no='') "
-            "AND logistics_text IS NOT NULL AND logistics_text != ''"
-        ).fetchall()
+        where = "logistics_text IS NOT NULL AND logistics_text != ''"
+        if not args.all:
+            where += " AND (tracking_no IS NULL OR tracking_no='')"
+        rows = conn.execute(f"SELECT * FROM orders WHERE {where}").fetchall()
         for row in rows:
             number, _code, _name = tracking.extract(row["logistics_text"])
             if not number:
@@ -44,12 +48,28 @@ def main() -> int:
                 image_url=row["image_url"],
                 logistics_text=row["logistics_text"],
             )
+            shipment_status = {
+                "completed": "delivered",
+                "shipped": "in_transit",
+                "processing": "processing",
+                "cancelled": "returned",
+            }.get(row["status"] or "", "unknown")
+            db.upsert_shipment(
+                conn,
+                tracking_no=number,
+                carrier=_code,
+                carrier_name=_name,
+                platform=row["platform"],
+                status=shipment_status,
+                status_text=row["status_text"] or "",
+                last_event_at=row["updated_at"],
+            )
             db.add_parcel_event(
                 conn,
                 tracking_no=number,
                 event_time=row["updated_at"],
                 context=row["logistics_text"][:1000],
-                status="",
+                status=shipment_status,
                 source="jd_text",
             )
             updated += 1
