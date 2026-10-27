@@ -375,11 +375,32 @@ def _save_trace(order_row_id: int, platform_order_id: str, payload: dict[str, An
 def _collect_details(page: Any, orders: list[dict[str, Any]], id_map: dict[str, int]) -> int:
     if config.JD_DETAIL_MAX <= 0:
         return 0
-    candidates = [
+
+    def recent(order: dict[str, Any], days: int = 14) -> bool:
+        try:
+            submitted = datetime.fromisoformat(str(order.get("order_time") or "").replace("Z", "+00:00"))
+            if submitted.tzinfo is None:
+                submitted = submitted.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - submitted).days <= days
+        except ValueError:
+            return False
+
+    active = [
         order
         for order in orders
         if order.get("url") and order.get("status") in {"shipped", "processing"}
-    ][: config.JD_DETAIL_MAX]
+    ]
+    # A just-delivered order still benefits from its waybill/trace. Keep this
+    # tiny so "don't backfill history" remains true.
+    just_delivered = [
+        order
+        for order in orders
+        if order.get("url")
+        and order.get("status") == "completed"
+        and not order.get("tracking_no")
+        and recent(order)
+    ][:3]
+    candidates = (active + just_delivered)[: config.JD_DETAIL_MAX]
     enriched = 0
     for order in candidates:
         platform_order_id = str(order.get("platform_order_id") or "")
