@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="robots" content="noindex,nofollow">
+  <title>登录 · OrderHub</title>
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="login-wrap">
+    <div class="login-card">
+      <div class="brand-mark login-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5v-9Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M4.5 7.7 12 12l7.5-4.3M12 12v8.6" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+      </div>
+      <h1>OrderHub</h1>
+      <p class="muted">输入访问密码后继续。</p>
+      <form id="loginForm">
+        <label class="field">
+          <span>密码</span>
+          <input id="password" type="password" autocomplete="current-password" autofocus required>
+        </label>
+        <div class="login-error hidden" id="loginError"></div>
+        <button class="btn primary login-btn" type="submit" id="loginBtn">登录</button>
+      </form>
+      <p class="muted small login-hint">这是单用户私人实例。API 客户端仍使用 Bearer token。</p>
+    </div>
+  </main>
+  <script src="/login.js"></script>
+</body>
+</html>

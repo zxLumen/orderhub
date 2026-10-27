@@ -57,6 +57,19 @@ HOST = os.environ.get("ORDERHUB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ORDERHUB_PORT", "8000"))
 TOKEN = os.environ.get("ORDERHUB_TOKEN", "").strip()
 
+# Web login (public server). The token remains for API clients such as the
+# collector agent and iOS Shortcuts.
+PASSWORD_HASH = os.environ.get("ORDERHUB_PASSWORD_HASH", "").strip()
+SESSION_SECRET = os.environ.get("ORDERHUB_SESSION_SECRET", "").strip()
+SESSION_TTL_SECONDS = int(os.environ.get("ORDERHUB_SESSION_TTL", str(30 * 24 * 3600)))
+COOKIE_SECURE = _bool("ORDERHUB_COOKIE_SECURE", False)
+LOGIN_RATE_LIMIT = int(os.environ.get("ORDERHUB_LOGIN_RATE_LIMIT", "8"))
+LOGIN_RATE_WINDOW = int(os.environ.get("ORDERHUB_LOGIN_RATE_WINDOW", "900"))
+
+# Remote collector mode (Windows agent -> this server)
+SERVER_URL = os.environ.get("ORDERHUB_SERVER_URL", "").strip().rstrip("/")
+COLLECTOR_TOKEN = os.environ.get("ORDERHUB_COLLECTOR_TOKEN", "").strip() or TOKEN
+
 # Optional integrations
 KUAIDI100_CUSTOMER = os.environ.get("KUAIDI100_CUSTOMER", "").strip()
 KUAIDI100_KEY = os.environ.get("KUAIDI100_KEY", "").strip()
@@ -75,7 +88,7 @@ JD_MAX_SCROLLS = max(1, int(os.environ.get("JD_MAX_SCROLLS", "8")))
 PARCEL_POLL_SECONDS = int(os.environ.get("PARCEL_POLL_SECONDS", "1800"))
 
 # Keep a sane upper bound on request bodies (screenshots are sent as text).
-MAX_BODY_BYTES = int(os.environ.get("ORDERHUB_MAX_BODY", str(2 * 1024 * 1024)))
+MAX_BODY_BYTES = int(os.environ.get("ORDERHUB_MAX_BODY", str(8 * 1024 * 1024)))
 
 # User-facing defaults
 APP_NAME = "OrderHub"

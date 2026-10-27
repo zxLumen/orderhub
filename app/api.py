@@ -2,25 +2,44 @@
 
 from __future__ import annotations
 
+import gzip
 import hmac
 import json
 import logging
 import mimetypes
 import sys
 import threading
+import time
 import urllib.parse
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from . import config, db
-from .collectors.jd import collect_jd_async, normalize_mode
+from . import auth, config, db
+from .collectors.jd import normalize_mode
 from .db import session, utc_now
 from .services.ingest import ingest_capture, ingest_sms, poll_parcels
 
 log = logging.getLogger(__name__)
 
 VERSION = "0.1.0"
+
+_LOGIN_LOCK = threading.Lock()
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+
+
+def _login_rate_limited(address: str) -> bool:
+    now = time.time()
+    window = max(60, config.LOGIN_RATE_WINDOW)
+    with _LOGIN_LOCK:
+        attempts = [stamp for stamp in _LOGIN_ATTEMPTS.get(address, []) if now - stamp < window]
+        if len(attempts) >= max(1, config.LOGIN_RATE_LIMIT):
+            _LOGIN_ATTEMPTS[address] = attempts
+            return True
+        attempts.append(now)
+        _LOGIN_ATTEMPTS[address] = attempts
+        return False
 
 
 class ApiError(Exception):
@@ -33,7 +52,8 @@ class ApiError(Exception):
 def _public_config() -> dict[str, Any]:
     return {
         "version": VERSION,
-        "auth_required": bool(config.TOKEN),
+        "auth_required": bool(config.TOKEN or config.PASSWORD_HASH),
+        "login_required": bool(config.PASSWORD_HASH),
         "kuaidi100_configured": bool(config.KUAIDI100_CUSTOMER and config.KUAIDI100_KEY),
         "bark_configured": bool(config.BARK_URL),
         "jd_collector_enabled": config.ENABLE_JD_COLLECTOR,
@@ -88,20 +108,77 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, status: int, message: str) -> None:
         self._json(status, {"ok": False, "error": message})
 
-    def _check_auth(self, path: str) -> None:
-        if not config.TOKEN:
-            return
-        if path in {"/api/health", "/api/config"}:
-            return
+    def _session_value(self) -> str:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return ""
+        morsel = cookie.get(auth.COOKIE_NAME)
+        return morsel.value if morsel else ""
+
+    def _bearer_token(self) -> str:
         header = self.headers.get("Authorization", "")
         token = ""
         if header.lower().startswith("bearer "):
             token = header[7:].strip()
         if not token:
             token = self.headers.get("X-OrderHub-Token", "").strip()
-        if token and hmac.compare_digest(token, config.TOKEN):
-            return
+        return token
+
+    def _session_authenticated(self) -> bool:
+        return bool(
+            config.PASSWORD_HASH
+            and config.SESSION_SECRET
+            and auth.verify_session(config.SESSION_SECRET, self._session_value())
+        )
+
+    def _authenticated(self) -> bool:
+        if not config.TOKEN and not config.PASSWORD_HASH:
+            return True
+        token = self._bearer_token()
+        if config.TOKEN and token and hmac.compare_digest(token, config.TOKEN):
+            return True
+        return self._session_authenticated()
+
+    def _check_auth(self, path: str) -> str:
+        if not config.TOKEN and not config.PASSWORD_HASH:
+            return "none"
+        if path in {"/api/health", "/api/config", "/api/session", "/api/login", "/api/logout"}:
+            return "none"
+        token = self._bearer_token()
+        if config.TOKEN and token and hmac.compare_digest(token, config.TOKEN):
+            return "token"
+        if self._session_authenticated():
+            return "session"
         raise ApiError(HTTPStatus.UNAUTHORIZED, "unauthorized")
+
+    def _set_session_cookie(self, value: str, max_age: int) -> None:
+        secure = config.COOKIE_SECURE or self.headers.get("X-Forwarded-Proto", "").lower() == "https"
+        parts = [
+            f"{auth.COOKIE_NAME}={value}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Lax",
+            f"Max-Age={max_age}",
+        ]
+        if secure:
+            parts.append("Secure")
+        self.send_header("Set-Cookie", "; ".join(parts))
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _csrf_ok(self) -> bool:
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return True
+        parsed = urllib.parse.urlparse(origin)
+        host = self.headers.get("Host", "")
+        return parsed.netloc == host
 
     def _read_json(self) -> dict[str, Any]:
         try:
@@ -113,6 +190,13 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         if not raw:
             return {}
+        if self.headers.get("Content-Encoding", "").lower() == "gzip":
+            try:
+                raw = gzip.decompress(raw)
+            except OSError:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid gzip body")
+            if len(raw) > max(config.MAX_BODY_BYTES * 8, 8 * 1024 * 1024):
+                raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "body too large")
         try:
             value = json.loads(raw.decode("utf-8", "replace"))
         except json.JSONDecodeError:
@@ -140,8 +224,17 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 self._check_auth(path)
                 self._get_api(path, urllib.parse.parse_qs(parsed.query))
-            else:
-                self._serve_static(path)
+                return
+            if config.PASSWORD_HASH and not self._session_authenticated():
+                public = (
+                    path in {"/login", "/login.html", "/login.js", "/styles.css"}
+                    or path.startswith("/icons/")
+                    or path in {"/manifest.webmanifest", "/sw.js", "/app.js"}
+                )
+                if not public:
+                    self._redirect("/login?next=" + urllib.parse.quote(path or "/"))
+                    return
+            self._serve_static(path)
         except ApiError as exc:
             self._error(exc.status, exc.message)
         except Exception:  # pragma: no cover
@@ -152,7 +245,20 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
         try:
-            self._check_auth(path)
+            if path == "/api/login":
+                self._handle_login()
+                return
+            if path == "/api/logout":
+                self.send_response(HTTPStatus.OK)
+                self._set_session_cookie("", 0)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+                return
+            mode = self._check_auth(path)
+            if mode == "session" and not self._csrf_ok():
+                raise ApiError(HTTPStatus.FORBIDDEN, "origin mismatch")
             payload = self._read_json()
             self._post_api(path, payload, urllib.parse.parse_qs(parsed.query))
         except ApiError as exc:
@@ -160,6 +266,26 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # pragma: no cover
             log.exception("POST failed: %s", path)
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal error")
+
+    def _handle_login(self) -> None:
+        if not config.PASSWORD_HASH:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "password login not configured")
+        if not config.SESSION_SECRET:
+            raise ApiError(HTTPStatus.INTERNAL_SERVER_ERROR, "session secret missing")
+        if _login_rate_limited(self.client_address[0]):
+            raise ApiError(HTTPStatus.TOO_MANY_REQUESTS, "rate_limited")
+        payload = self._read_json()
+        password = str(payload.get("password") or "")
+        if not auth.verify_password(password, config.PASSWORD_HASH):
+            raise ApiError(HTTPStatus.UNAUTHORIZED, "invalid_password")
+        session_value = auth.create_session(config.SESSION_SECRET, config.SESSION_TTL_SECONDS)
+        self.send_response(HTTPStatus.OK)
+        self._set_session_cookie(session_value, config.SESSION_TTL_SECONDS)
+        body = b'{"ok":true}'
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     # ------------------------------------------------------------------
     # API
@@ -170,9 +296,21 @@ class Handler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "ok": True,
+                    "api_version": 1,
                     "version": VERSION,
                     "time": utc_now(),
-                    "auth_required": bool(config.TOKEN),
+                    "auth_required": bool(config.TOKEN or config.PASSWORD_HASH),
+                    "login_required": bool(config.PASSWORD_HASH),
+                },
+            )
+            return
+        if path == "/api/session":
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "authenticated": self._authenticated(),
+                    "login_required": bool(config.PASSWORD_HASH),
                 },
             )
             return
@@ -252,6 +390,31 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif path == "/api/stats":
                 self._json(HTTPStatus.OK, {"ok": True, **_public_config(), **db.stats(conn)})
+            elif path == "/api/collector/status":
+                worker = db.get_worker(conn)
+                online = False
+                if worker and worker.get("last_seen"):
+                    try:
+                        from datetime import datetime, timezone
+
+                        seen = datetime.fromisoformat(worker["last_seen"].replace("Z", "+00:00"))
+                        online = (datetime.now(timezone.utc) - seen).total_seconds() < 90
+                    except ValueError:
+                        pass
+                self._json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "online": online,
+                        "worker": worker,
+                        "commands": db.list_commands(conn, limit=10),
+                        "runs": db.stats(conn)["collector_runs"],
+                    },
+                )
+            elif path == "/api/collector/commands/next":
+                worker = _str(query, "worker") or "windows"
+                command = db.claim_command(conn, worker)
+                self._json(HTTPStatus.OK, {"ok": True, "command": command})
             elif path == "/api/export":
                 self._json(
                     HTTPStatus.OK,
@@ -333,8 +496,45 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/collectors/jd/run":
             mode = normalize_mode(payload.get("mode"))
-            threading.Thread(target=collect_jd_async, args=(mode,), daemon=True).start()
-            self._json(HTTPStatus.ACCEPTED, {"ok": True, "started": True, "mode": mode})
+            with session() as conn:
+                command_id = db.enqueue_command(conn, platform="jd", mode=mode)
+            self._json(
+                HTTPStatus.ACCEPTED,
+                {"ok": True, "queued": True, "command_id": command_id, "mode": mode},
+            )
+            return
+
+        if path == "/api/collector/heartbeat":
+            with session() as conn:
+                db.heartbeat_worker(
+                    conn,
+                    name=str(payload.get("name") or "windows"),
+                    version=str(payload.get("version") or ""),
+                    chrome_ok=bool(payload.get("chrome_ok")),
+                    message=str(payload.get("message") or ""),
+                )
+            self._json(HTTPStatus.OK, {"ok": True})
+            return
+
+        if path == "/api/collector/ingest":
+            with session() as conn:
+                result = _ingest_remote(conn, payload)
+            self._json(HTTPStatus.OK, {"ok": True, **result})
+            return
+
+        if path.startswith("/api/collector/commands/") and path.endswith("/finish"):
+            try:
+                command_id = int(path.rsplit("/", 2)[-2])
+            except (ValueError, IndexError):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid command id")
+            with session() as conn:
+                db.finish_command(
+                    conn,
+                    command_id,
+                    status=str(payload.get("status") or "done"),
+                    message=str(payload.get("message") or ""),
+                )
+            self._json(HTTPStatus.OK, {"ok": True})
             return
 
         raise ApiError(HTTPStatus.NOT_FOUND, "not found")
@@ -346,6 +546,8 @@ class Handler(BaseHTTPRequestHandler):
         web_dir = config.WEB_DIR.resolve()
         if path in {"", "/"}:
             target = web_dir / "index.html"
+        elif path in {"/login", "/login.html"}:
+            target = web_dir / "login.html"
         else:
             relative = path.lstrip("/")
             target = (web_dir / relative).resolve()
@@ -416,6 +618,82 @@ def _insert_order(conn: Any, payload: dict[str, Any]) -> int:
         logistics_text=payload.get("logistics_text") or None,
         raw=payload.get("raw"),
     )
+
+
+def _ingest_remote(conn: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    orders = payload.get("orders") or []
+    runs = payload.get("runs") or []
+    alerts = payload.get("alerts") or []
+    worker = payload.get("worker") if isinstance(payload.get("worker"), dict) else None
+
+    order_count = 0
+    for raw_order in orders:
+        if not isinstance(raw_order, dict):
+            continue
+        item = dict(raw_order)
+        if "raw" not in item and item.get("raw_json"):
+            try:
+                item["raw"] = json.loads(item["raw_json"])
+            except (TypeError, json.JSONDecodeError):
+                pass
+        _insert_order(conn, item)
+        order_count += 1
+
+    run_count = 0
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        db.insert_collector_run(
+            conn,
+            platform=str(run.get("platform") or "jd"),
+            started_at=run.get("started_at"),
+            finished_at=run.get("finished_at"),
+            status=str(run.get("status") or "unknown"),
+            items=int(run.get("items") or 0),
+            captcha=bool(run.get("captcha")),
+            message=str(run.get("message") or ""),
+        )
+        run_count += 1
+
+    alert_count = 0
+    for alert in alerts:
+        if not isinstance(alert, dict):
+            continue
+        db.add_alert(
+            conn,
+            kind=str(alert.get("kind") or "collector"),
+            title=str(alert.get("title") or "采集提醒"),
+            body=str(alert.get("body") or ""),
+            created_at=alert.get("created_at"),
+        )
+        alert_count += 1
+
+    if worker:
+        db.heartbeat_worker(
+            conn,
+            name=str(worker.get("name") or "windows"),
+            version=str(worker.get("version") or ""),
+            chrome_ok=bool(worker.get("chrome_ok")),
+            message=str(worker.get("message") or ""),
+        )
+
+    command_id = payload.get("command_id")
+    if command_id:
+        try:
+            db.finish_command(
+                conn,
+                int(command_id),
+                status=str(payload.get("status") or "done"),
+                message=str(payload.get("message") or ""),
+            )
+        except (TypeError, ValueError):
+            pass
+
+    return {
+        "orders": order_count,
+        "runs": run_count,
+        "alerts": alert_count,
+    }
 
 
 def _hydrate_search(conn: Any, results: list[dict[str, Any]]) -> list[dict[str, Any]]:

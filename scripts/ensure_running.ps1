@@ -1,11 +1,11 @@
-# Idempotent watchdog: make sure OrderHub Chrome + server are running.
+# Idempotent Windows watchdog: Chrome 9333 + collector agent.
+# The web server runs on the Linux server; this machine only collects JD data.
 # Safe to call at logon and every few minutes.
 $ErrorActionPreference = "SilentlyContinue"
 
 $root = Split-Path -Parent $PSScriptRoot
 $logPath = Join-Path $root "data\autostart.log"
 $cdpPort = 9333
-$httpPort = 8000
 
 function Write-Log([string]$Message) {
     $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
@@ -29,14 +29,16 @@ if (-not (Test-Port $cdpPort)) {
     & (Join-Path $PSScriptRoot "chrome_ctl.ps1") -Mode headless | Out-Null
 }
 
-if (-not (Test-Port $httpPort)) {
-    Write-Log "http $httpPort down -> starting server"
+$agent = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*app.collector_agent*" }
+if (-not $agent) {
+    Write-Log "collector agent down -> starting"
     $python = Join-Path $root ".venv\Scripts\python.exe"
     if (-not (Test-Path $python)) { $python = "python" }
     Start-Process -FilePath $python `
-        -ArgumentList "-m", "app.server" `
+        -ArgumentList "-m", "app.collector_agent" `
         -WorkingDirectory $root `
         -WindowStyle Hidden `
-        -RedirectStandardOutput (Join-Path $root "data\server.out.log") `
-        -RedirectStandardError (Join-Path $root "data\server.err.log") | Out-Null
+        -RedirectStandardOutput (Join-Path $root "data\agent.out.log") `
+        -RedirectStandardError (Join-Path $root "data\agent.err.log") | Out-Null
 }

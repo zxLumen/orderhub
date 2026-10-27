@@ -1,0 +1,27 @@
+[Unit]
+Description=OrderHub web / API / scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orderhub
+Group=orderhub
+WorkingDirectory=/opt/orderhub
+EnvironmentFile=/etc/orderhub.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/orderhub/.venv/bin/python -m app.server
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/orderhub
+StateDirectory=orderhub
+StateDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

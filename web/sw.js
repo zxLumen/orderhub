@@ -6,6 +6,9 @@ const SHELL = new Set([
   "/app.js",
   "/styles.css",
   "/manifest.webmanifest",
+  "/login",
+  "/login.html",
+  "/login.js",
 ]);
 const ASSETS = [
   ...SHELL,

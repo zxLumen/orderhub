@@ -502,6 +502,34 @@ button { cursor: pointer; }
   .tabbar { bottom: 22px; }
 }
 
+.login-wrap {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.login-card {
+  width: min(100%, 360px);
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 28px 24px 22px;
+  box-shadow: var(--shadow);
+}
+.login-mark { width: 48px; height: 48px; border-radius: 15px; margin-bottom: 16px; }
+.login-card h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: -0.03em; }
+.login-card > p { margin: 0 0 18px; font-size: 13px; }
+.login-btn { width: 100%; height: 42px; margin-top: 16px; }
+.login-error {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 12.5px;
+}
+.login-hint { margin-top: 18px !important; margin-bottom: 0 !important; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

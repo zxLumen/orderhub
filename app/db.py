@@ -221,6 +221,27 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_created ON alerts(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS collector_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'recent',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    claimed_at TEXT,
+    finished_at TEXT,
+    worker TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_commands_status ON collector_commands(status, id);
+
+CREATE TABLE IF NOT EXISTS collector_workers (
+    name TEXT PRIMARY KEY,
+    last_seen TEXT NOT NULL,
+    version TEXT NOT NULL DEFAULT '',
+    chrome_ok INTEGER NOT NULL DEFAULT 0,
+    message TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS search_docs (
     tokens TEXT NOT NULL,
     doc_type TEXT NOT NULL,
@@ -751,6 +772,122 @@ def start_collector_run(conn: sqlite3.Connection, platform: str) -> int:
     cur = conn.execute(
         "INSERT INTO collector_runs(platform, started_at, status) VALUES (?, ?, 'running')",
         (platform, utc_now()),
+    )
+    return int(cur.lastrowid)
+
+
+def enqueue_command(
+    conn: sqlite3.Connection, *, platform: str = "jd", mode: str = "recent"
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO collector_commands(platform, mode, status, created_at) "
+        "VALUES (?, ?, 'pending', ?)",
+        (platform, mode, utc_now()),
+    )
+    return int(cur.lastrowid)
+
+
+def claim_command(conn: sqlite3.Connection, worker: str) -> dict[str, Any] | None:
+    """Atomically claim the oldest pending command."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT * FROM collector_commands WHERE status='pending' ORDER BY id LIMIT 1"
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return None
+        conn.execute(
+            "UPDATE collector_commands SET status='running', claimed_at=?, worker=? WHERE id=?",
+            (utc_now(), worker, row["id"]),
+        )
+        conn.commit()
+        result = dict(row)
+        result["status"] = "running"
+        result["worker"] = worker
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def finish_command(
+    conn: sqlite3.Connection,
+    command_id: int,
+    *,
+    status: str = "done",
+    message: str = "",
+) -> None:
+    conn.execute(
+        "UPDATE collector_commands SET status=?, finished_at=?, message=? WHERE id=?",
+        (status, utc_now(), message[:2000], command_id),
+    )
+
+
+def list_commands(conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in conn.execute(
+            "SELECT * FROM collector_commands ORDER BY id DESC LIMIT ?",
+            (max(1, min(limit, 100)),),
+        ).fetchall()
+    ]
+
+
+def heartbeat_worker(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    version: str = "",
+    chrome_ok: bool = False,
+    message: str = "",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO collector_workers(name, last_seen, version, chrome_ok, message)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            last_seen=excluded.last_seen,
+            version=excluded.version,
+            chrome_ok=excluded.chrome_ok,
+            message=excluded.message
+        """,
+        (name, utc_now(), version, 1 if chrome_ok else 0, message[:500]),
+    )
+
+
+def get_worker(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM collector_workers ORDER BY last_seen DESC LIMIT 1"
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def insert_collector_run(
+    conn: sqlite3.Connection,
+    *,
+    platform: str,
+    started_at: str | None,
+    finished_at: str | None,
+    status: str,
+    items: int = 0,
+    captcha: bool = False,
+    message: str = "",
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO collector_runs(platform, started_at, finished_at, status, items, captcha, message)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            platform,
+            normalize_time(started_at) or utc_now(),
+            normalize_time(finished_at),
+            status or "unknown",
+            int(items or 0),
+            1 if captcha else 0,
+            (message or "")[:2000],
+        ),
     )
     return int(cur.lastrowid)
 

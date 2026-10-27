@@ -37,7 +37,37 @@
 
 ---
 
-## 快速开始（Windows）
+## 服务器托管模式（当前推荐）
+
+Web / API / SQLite 跑在 Linux 服务器，Windows 只跑京东采集 agent：
+
+```
+Windows Chrome 9333 + app.collector_agent
+        │ 出站 HTTPS（订单/运行记录/告警）
+        ▼
+orderhub.zxlumen.cn  →  Caddy  →  127.0.0.1:8000
+```
+
+服务器部署见 `deploy/README.md`。Windows 端 `.env`：
+
+```ini
+ORDERHUB_SERVER_URL=https://orderhub.zxlumen.cn
+ORDERHUB_COLLECTOR_TOKEN=与服务器 ORDERHUB_TOKEN 相同
+ORDERHUB_DATA_DIR=C:\OrderHub\data
+ENABLE_SCHEDULER=0
+ENABLE_JD_COLLECTOR=0
+JD_CDP_URL=http://127.0.0.1:9333
+```
+
+启动：
+
+```bat
+scripts\start_agent.bat
+```
+
+`scripts\autostart.vbs` / `ensure_running.ps1` 现在只守护 Chrome 9333 和采集 agent，不再启动本地 Web。
+
+## 快速开始（Windows 本地开发）
 
 ### 1. 安装
 

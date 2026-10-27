@@ -34,6 +34,7 @@
     sms: [],
     captures: [],
     alerts: [],
+    collector: null,
     searchResults: [],
     searchQuery: "",
     platform: "",
@@ -126,6 +127,11 @@
       throw new Error("网络不可用，检查 Tailscale 或后端是否启动");
     }
     if (response.status === 401) {
+      if (state.config?.login_required) {
+        const next = encodeURIComponent(location.pathname + location.search);
+        location.replace(`/login?next=${next}`);
+        throw new Error("需要登录");
+      }
       showTokenModal();
       throw new Error("需要访问令牌");
     }
@@ -147,7 +153,9 @@
   async function loadConfig() {
     try {
       state.config = await api("/api/config");
-      if (state.config.auth_required && !state.token) showTokenModal();
+      if (state.config.auth_required && !state.config.login_required && !state.token) {
+        showTokenModal();
+      }
     } catch (error) {
       console.warn(error);
     }
@@ -159,13 +167,14 @@
     const refreshBtn = $("#refreshBtn");
     if (!silent) refreshBtn.classList.add("spinning");
     try {
-      const [stats, orders, parcels, sms, captures, alerts] = await Promise.all([
+      const [stats, orders, parcels, sms, captures, alerts, collector] = await Promise.all([
         api("/api/stats"),
         api("/api/orders?limit=30"),
         api("/api/shipments?limit=100"),
         api("/api/sms?limit=30"),
         api("/api/captures?limit=20"),
         api("/api/alerts?limit=20"),
+        api("/api/collector/status").catch(() => null),
       ]);
       state.stats = stats;
       state.config = { ...(state.config || {}), ...stats };
@@ -174,6 +183,7 @@
       state.sms = sms.items || [];
       state.captures = captures.items || [];
       state.alerts = alerts.items || [];
+      state.collector = collector;
       renderAll();
     } catch (error) {
       if (!String(error.message).includes("令牌")) toast(error.message);
@@ -317,13 +327,17 @@
   function renderHealth() {
     const config = state.config || {};
     $("#versionText").textContent = config.version ? `v${config.version}` : "";
+    const worker = state.collector?.worker;
+    const collectorOnline = Boolean(state.collector?.online);
+    const collectorText = collectorOnline
+      ? `在线 · ${worker?.version || ""}`.trim()
+      : (worker?.last_seen ? `离线 · ${timeText(worker.last_seen)}` : "未连接");
     const rows = [
-      ["访问令牌", config.auth_required ? "已开启" : "未设置", config.auth_required ? "ok" : "warn"],
+      ["登录", config.login_required ? "密码" : (config.auth_required ? "Token" : "未设置"), config.auth_required ? "ok" : "warn"],
+      ["采集器", collectorText, collectorOnline ? "ok" : "warn"],
       ["快递100", config.kuaidi100_configured ? "已配置" : "未配置", config.kuaidi100_configured ? "ok" : "off"],
-      ["Bark 推送", config.bark_configured ? "已配置" : "未配置", config.bark_configured ? "ok" : "off"],
-      ["京东采集", config.jd_collector_enabled ? "已开启" : "关闭", config.jd_collector_enabled ? "ok" : "off"],
       ["后台调度", config.scheduler_enabled ? "运行中" : "关闭", config.scheduler_enabled ? "ok" : "off"],
-      ["数据存储", "本地 SQLite", "ok"],
+      ["数据存储", "服务器 SQLite", "ok"],
     ];
     $("#healthGrid").innerHTML = rows.map(([k, v, tone]) => `
       <div class="health-item"><div class="k">${esc(k)}</div><div class="v ${esc(tone)}">${esc(v)}</div></div>
@@ -553,22 +567,14 @@
   }
 
   async function collectJd() {
-    if (!state.config?.jd_collector_enabled) {
-      toast("先在 .env 打开 ENABLE_JD_COLLECTOR");
-      return;
-    }
     try {
       await api("/api/collectors/jd/run", { method: "POST", body: "{}" });
-      toast("已开始京东采集，稍后看结果");
+      toast(state.collector?.online ? "已排队，采集器马上开始" : "已排队；采集器离线，联网后执行");
       setTimeout(() => loadDashboard({ silent: true }), 12000);
     } catch (error) { toast(error.message); }
   }
 
   async function collectJdFull() {
-    if (!state.config?.jd_collector_enabled) {
-      toast("先在 .env 打开 ENABLE_JD_COLLECTOR");
-      return;
-    }
     const ok = window.confirm(
       "全量采集会遍历所有时间档位（今年、过去各年、2014 前），可能需要几分钟。继续？"
     );
@@ -578,7 +584,7 @@
         method: "POST",
         body: JSON.stringify({ mode: "full" }),
       });
-      toast("已开始全量采集，进度看「采集记录」");
+      toast(state.collector?.online ? "已排队，采集器马上开始" : "已排队；采集器离线，联网后执行");
       setTimeout(() => loadDashboard({ silent: true }), 20000);
     } catch (error) { toast(error.message); }
   }
