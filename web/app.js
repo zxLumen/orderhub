@@ -230,8 +230,11 @@
 
   function orderCard(order) {
     const title = order.title || "(无商品名)";
-    const sub = [order.shop, order.tracking_no ? `运单 ${order.tracking_no}` : ""]
-      .filter(Boolean).join(" · ");
+    const sub = [
+      order.shop,
+      order.tracking_no ? `运单 ${order.tracking_no}` : "",
+      Number(order.shipment_count) > 1 ? `${order.shipment_count} 个包裹` : "",
+    ].filter(Boolean).join(" · ");
     const status = statusBadge(order.status, order.status_text);
     const amount = order.amount != null ? `<span class="card-amount">${esc(money(order.amount))}</span>` : "";
     return `
@@ -293,7 +296,8 @@
 
   function shipmentCard(shipment) {
     const status = statusBadge(shipment.status, shipment.status_text);
-    const meta = [shipment.carrier_name, shipment.tracking_no].filter(Boolean).join(" · ");
+    const meta = [shipment.carrier_name, shipment.tracking_no, shipment.order_titles]
+      .filter(Boolean).join(" · ");
     const extra = shipment.pickup_code
       ? `取件码 <strong>${esc(shipment.pickup_code)}</strong>${shipment.location ? " · " + esc(shipment.location) : ""}`
       : (shipment.location || "");
@@ -483,7 +487,27 @@
     return { quantity, payment, logistics };
   }
 
-  function openOrderSheet(order) {
+  function orderShipmentBlock(shipment) {
+    const events = shipment.events || [];
+    return `
+      <div class="panel" style="margin:14px 0 0;padding:14px;box-shadow:none">
+        <div class="card-top">${statusBadge(shipment.status, shipment.status_text)}${shipment.platform ? platformBadge(shipment.platform) : ""}</div>
+        <div class="card-title">${esc(shipment.carrier_name || "包裹")} · ${esc(shipment.tracking_no)}</div>
+        ${shipment.pickup_code ? `<div class="card-sub">取件码 <strong>${esc(shipment.pickup_code)}</strong>${shipment.location ? " · " + esc(shipment.location) : ""}</div>` : ""}
+        <div class="timeline compact" style="margin-top:10px">
+          ${events.slice(0, 12).map((event) => `
+            <div class="timeline-item">
+              <div class="timeline-dot ${event.status === "delivered" ? "green" : event.status === "out_for_delivery" ? "amber" : "blue"}"></div>
+              <div class="timeline-body">
+                <div class="timeline-text">${esc(event.context || "")}</div>
+                <div class="timeline-time">${esc(timeText(event.event_time))}</div>
+              </div>
+            </div>`).join("")}
+        </div>
+      </div>`;
+  }
+
+  async function openOrderSheet(order) {
     const raw = parseRaw(order);
     const facts = orderFacts(order, raw);
     const links = [];
@@ -512,8 +536,22 @@
         ["物流", facts.logistics ? `<span class="logistics">${esc(facts.logistics)}</span>` : ""],
         ["链接", links.join(" · ")],
       ])}
-      ${order.raw_json ? `<details class="raw-box"><summary>原始数据</summary><pre>${esc(String(order.raw_json))}</pre></details>` : ""}
+      <div id="orderShipments"><div class="muted small" style="margin-top:14px">加载包裹物流…</div></div>
     `);
+    if (!order.id) return;
+    try {
+      const data = await api(`/api/orders/${encodeURIComponent(order.id)}`);
+      const item = data.item || {};
+      const shipments = item.shipments || [];
+      const target = $("#orderShipments");
+      if (!target) return;
+      target.innerHTML = shipments.length
+        ? `<div class="section-head spaced"><h2>包裹与物流</h2><span class="muted">${shipments.length} 个</span></div>${shipments.map(orderShipmentBlock).join("")}`
+        : `<div class="muted small" style="margin-top:14px">还没有运单号；发货后会自动补上。</div>`;
+    } catch (error) {
+      const target = $("#orderShipments");
+      if (target) target.innerHTML = `<div class="muted small">${esc(error.message)}</div>`;
+    }
   }
 
   async function openParcelSheet(trackingNo) {
@@ -527,6 +565,7 @@
         <div class="card-top">${statusBadge(item.status, item.status_text)}${item.platform ? platformBadge(item.platform) : ""}</div>
         ${kv([
           ["运单号", esc(item.tracking_no)],
+          ["关联订单", esc(item.order_titles || "")],
           ["取件码", item.pickup_code ? `<strong>${esc(item.pickup_code)}</strong>` : ""],
           ["位置", esc(item.location || "")],
           ["更新时间", esc(timeText(item.updated_at))],

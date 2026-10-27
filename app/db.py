@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from . import config
+from .services.tracking import extract as extract_tracking
 
 CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
 ASCII_WORD = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]{1,}")
@@ -152,11 +153,22 @@ CREATE TABLE IF NOT EXISTS shipments (
     location TEXT NOT NULL DEFAULT '',
     last_event_at TEXT,
     order_id INTEGER,
+    raw_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status);
 CREATE INDEX IF NOT EXISTS idx_shipments_updated ON shipments(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS order_shipments (
+    order_id INTEGER NOT NULL,
+    tracking_no TEXT NOT NULL,
+    package_index INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (order_id, tracking_no)
+);
+CREATE INDEX IF NOT EXISTS idx_order_shipments_tracking ON order_shipments(tracking_no);
 
 CREATE TABLE IF NOT EXISTS parcel_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -329,6 +341,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for name in ("image_url", "product_url", "logistics_text"):
         if name not in columns:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {name} TEXT")
+    shipment_columns = {row["name"] for row in conn.execute("PRAGMA table_info(shipments)")}
+    if "raw_json" not in shipment_columns:
+        conn.execute("ALTER TABLE shipments ADD COLUMN raw_json TEXT")
 
 
 def _fts_delete(conn: sqlite3.Connection, doc_type: str, doc_id: str) -> None:
@@ -384,6 +399,94 @@ def _synthetic_order_id(
 ) -> str:
     raw = f"{platform}|{title}|{amount}|{order_time}|{tracking_no or ''}"
     return "local-" + sha256(raw)[:20]
+
+
+def ensure_shipment(
+    conn: sqlite3.Connection,
+    *,
+    tracking_no: str,
+    carrier: str = "",
+    carrier_name: str = "",
+    platform: str = "",
+    order_id: int | None = None,
+) -> None:
+    """Create a placeholder without an event timestamp.
+
+    A later real tracking event must not be rejected as "stale" just because the
+    order row was created first with an unknown status.
+    """
+    tracking_no = (tracking_no or "").strip().upper()
+    if not tracking_no:
+        return
+    now = utc_now()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO shipments(tracking_no, carrier, carrier_name, platform,
+                                        status, status_text, pickup_code, location,
+                                        last_event_at, order_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'unknown', '', '', '', NULL, ?, ?, ?)
+        """,
+        (tracking_no, carrier or "", carrier_name or "", (platform or "").lower(), order_id, now, now),
+    )
+
+
+def link_order_shipment(
+    conn: sqlite3.Connection,
+    *,
+    order_id: int,
+    tracking_no: str,
+    package_index: int = 0,
+    source: str = "",
+) -> None:
+    tracking_no = (tracking_no or "").strip().upper()
+    if not tracking_no:
+        return
+    conn.execute(
+        """
+        INSERT INTO order_shipments(order_id, tracking_no, package_index, source, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(order_id, tracking_no) DO UPDATE SET
+            package_index=excluded.package_index,
+            source=COALESCE(NULLIF(excluded.source, ''), order_shipments.source)
+        """,
+        (order_id, tracking_no, int(package_index or 0), source or "", utc_now()),
+    )
+
+
+def list_order_shipments(conn: sqlite3.Connection, order_id: int) -> list[dict[str, Any]]:
+    return [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT os.package_index, os.source, s.*
+            FROM order_shipments os
+            JOIN shipments s ON s.tracking_no = os.tracking_no
+            WHERE os.order_id=?
+            ORDER BY os.package_index, os.created_at
+            """,
+            (order_id,),
+        ).fetchall()
+    ]
+
+
+def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    result.pop("raw_json", None)
+    result["shipments"] = []
+    for shipment in list_order_shipments(conn, order_id):
+        shipment["events"] = [
+            dict(event)
+            for event in conn.execute(
+                "SELECT * FROM parcel_events WHERE tracking_no=? "
+                "ORDER BY COALESCE(event_time, created_at) DESC LIMIT 100",
+                (shipment["tracking_no"],),
+            ).fetchall()
+        ]
+        result["shipments"].append(shipment)
+    return result
 
 
 def upsert_order(
@@ -461,6 +564,21 @@ def upsert_order(
     ).fetchone()
     order_id = int(row["id"])
     if tracking_no:
+        _number, carrier, carrier_name = extract_tracking(logistics_text or title or "")
+        ensure_shipment(
+            conn,
+            tracking_no=tracking_no,
+            carrier=carrier,
+            carrier_name=carrier_name,
+            platform=platform,
+            order_id=order_id,
+        )
+        link_order_shipment(
+            conn,
+            order_id=order_id,
+            tracking_no=tracking_no,
+            source="order",
+        )
         conn.execute(
             "UPDATE shipments SET order_id=COALESCE(order_id, ?), platform=? WHERE tracking_no=?",
             (order_id, platform, tracking_no.upper()),
@@ -490,6 +608,7 @@ def upsert_shipment(
     location: str = "",
     last_event_at: str | None = None,
     order_id: int | None = None,
+    raw: Any = None,
 ) -> tuple[int, bool]:
     """Upsert a shipment; returns (rowid, status_changed).
 
@@ -505,6 +624,7 @@ def upsert_shipment(
     status = (status or "unknown").lower()
     if status not in SHIPMENT_STATUSES:
         status = "unknown"
+    raw_json = json.dumps(raw, ensure_ascii=False) if raw is not None else None
 
     existing = conn.execute(
         "SELECT * FROM shipments WHERE tracking_no=?", (tracking_no,)
@@ -515,8 +635,8 @@ def upsert_shipment(
             """
             INSERT INTO shipments(tracking_no, carrier, carrier_name, platform, status,
                                   status_text, pickup_code, location, last_event_at,
-                                  order_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  order_id, raw_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 tracking_no,
@@ -529,6 +649,7 @@ def upsert_shipment(
                 location or "",
                 event_at,
                 order_id,
+                raw_json,
                 now,
                 now,
             ),
@@ -551,10 +672,19 @@ def upsert_shipment(
                     carrier_name=COALESCE(NULLIF(?, ''), carrier_name),
                     platform=CASE WHEN platform = '' THEN ? ELSE platform END,
                     order_id=COALESCE(?, order_id),
+                    raw_json=COALESCE(?, raw_json),
                     updated_at=?
                 WHERE tracking_no=?
                 """,
-                (carrier or "", carrier_name or "", (platform or "").lower(), order_id, now, tracking_no),
+                (
+                    carrier or "",
+                    carrier_name or "",
+                    (platform or "").lower(),
+                    order_id,
+                    raw_json,
+                    now,
+                    tracking_no,
+                ),
             )
         else:
             conn.execute(
@@ -569,6 +699,7 @@ def upsert_shipment(
                     location=COALESCE(NULLIF(?, ''), location),
                     last_event_at=?,
                     order_id=COALESCE(?, order_id),
+                    raw_json=COALESCE(?, raw_json),
                     updated_at=?
                 WHERE tracking_no=?
                 """,
@@ -582,6 +713,7 @@ def upsert_shipment(
                     location or "",
                     event_at,
                     order_id,
+                    raw_json,
                     now,
                     tracking_no,
                 ),
@@ -1084,7 +1216,13 @@ def list_orders(
     if status:
         where.append("status = ?")
         params.append(status)
-    sql = "SELECT * FROM orders"
+    sql = (
+        "SELECT id, platform, platform_order_id, title, shop, amount, status, "
+        "status_text, order_time, tracking_no, url, product_url, image_url, "
+        "logistics_text, created_at, updated_at, "
+        "(SELECT COUNT(*) FROM order_shipments os WHERE os.order_id=orders.id) "
+        "AS shipment_count FROM orders"
+    )
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY COALESCE(order_time, created_at) DESC LIMIT ? OFFSET ?"
@@ -1095,10 +1233,17 @@ def list_orders(
 def list_shipments(
     conn: sqlite3.Connection, *, active_only: bool = False, limit: int = 100
 ) -> list[dict[str, Any]]:
-    sql = "SELECT * FROM shipments"
+    sql = (
+        "SELECT s.tracking_no, s.carrier, s.carrier_name, s.platform, s.status, "
+        "s.status_text, s.pickup_code, s.location, s.last_event_at, s.order_id, "
+        "s.created_at, s.updated_at, "
+        "(SELECT GROUP_CONCAT(o.title, ' / ') FROM order_shipments os "
+        " JOIN orders o ON o.id=os.order_id WHERE os.tracking_no=s.tracking_no) "
+        "AS order_titles FROM shipments s"
+    )
     if active_only:
-        sql += " WHERE status NOT IN ('delivered','returned','refunded')"
-    sql += " ORDER BY updated_at DESC LIMIT ?"
+        sql += " WHERE s.status NOT IN ('delivered','returned','refunded')"
+    sql += " ORDER BY s.updated_at DESC LIMIT ?"
     return [dict(row) for row in conn.execute(sql, (max(1, min(limit, 300)),)).fetchall()]
 
 
@@ -1109,6 +1254,13 @@ def get_shipment(conn: sqlite3.Connection, tracking_no: str) -> dict[str, Any] |
     if not row:
         return None
     result = dict(row)
+    result.pop("raw_json", None)
+    titles = conn.execute(
+        "SELECT GROUP_CONCAT(o.title, ' / ') AS titles FROM order_shipments os "
+        "JOIN orders o ON o.id=os.order_id WHERE os.tracking_no=?",
+        (tracking_no.upper(),),
+    ).fetchone()
+    result["order_titles"] = (titles["titles"] if titles else "") or ""
     result["events"] = [
         dict(event)
         for event in conn.execute(

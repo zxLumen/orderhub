@@ -94,7 +94,14 @@ class Agent:
         try:
             return json.loads(self.state_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {"last_order_updated": "", "last_run_id": 0, "last_alert_id": 0, "last_schedule": 0}
+            return {
+                "last_order_updated": "",
+                "last_order_id": 0,
+                "last_run_id": 0,
+                "last_alert_id": 0,
+                "last_event_id": 0,
+                "last_schedule": 0,
+            }
 
     def _save_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,6 +170,25 @@ class Agent:
                     (int(self.state.get("last_alert_id") or 0),),
                 ).fetchall()
             ]
+            shipment_rows = [
+                dict(row)
+                for row in conn.execute("SELECT * FROM shipments").fetchall()
+            ]
+            event_rows = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM parcel_events WHERE id > ? ORDER BY id ASC",
+                    (int(self.state.get("last_event_id") or 0),),
+                ).fetchall()
+            ]
+            link_rows = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT os.tracking_no, os.package_index, os.source, "
+                    "o.platform, o.platform_order_id "
+                    "FROM order_shipments os JOIN orders o ON o.id=os.order_id"
+                ).fetchall()
+            ]
 
         order_chunks = [order_rows[i : i + 50] for i in range(0, len(order_rows), 50)] or [[]]
         for index, chunk_orders in enumerate(order_chunks):
@@ -172,6 +198,9 @@ class Agent:
                 "orders": chunk_orders,
                 "runs": run_rows if first else [],
                 "alerts": alert_rows if first else [],
+                "shipments": shipment_rows if first else [],
+                "events": event_rows if first else [],
+                "links": link_rows if first else [],
                 "worker": {
                     "name": self.worker,
                     "version": VERSION,
@@ -195,6 +224,8 @@ class Agent:
                 self.state["last_run_id"] = run_rows[-1]["id"]
             if first and alert_rows:
                 self.state["last_alert_id"] = alert_rows[-1]["id"]
+            if first and event_rows:
+                self.state["last_event_id"] = event_rows[-1]["id"]
             self._save_state()
 
         self._last_sync = time.time()

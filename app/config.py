@@ -89,6 +89,7 @@ JD_ORDER_URL = os.environ.get(
 JD_INTERVAL_SECONDS = int(os.environ.get("JD_INTERVAL_SECONDS", "21600"))
 JD_MAX_PAGES = max(1, int(os.environ.get("JD_MAX_PAGES", "50")))
 JD_MAX_SCROLLS = max(1, int(os.environ.get("JD_MAX_SCROLLS", "8")))
+JD_DETAIL_MAX = max(0, int(os.environ.get("JD_DETAIL_MAX", "10")))
 PARCEL_POLL_SECONDS = int(os.environ.get("PARCEL_POLL_SECONDS", "1800"))
 
 # Keep a sane upper bound on request bodies (screenshots are sent as text).

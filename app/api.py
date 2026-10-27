@@ -20,7 +20,7 @@ from . import auth, config, db
 from .collectors.jd import normalize_mode
 from .db import session, utc_now
 from .services import notifier, webpush
-from .services.ingest import ingest_capture, ingest_sms, poll_parcels
+from .services.ingest import ingest_capture, ingest_sms, poll_parcels, status_label
 
 log = logging.getLogger(__name__)
 
@@ -326,7 +326,16 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         with session() as conn:
-            if path == "/api/orders":
+            if path.startswith("/api/orders/"):
+                try:
+                    order_id = int(path.rsplit("/", 1)[-1])
+                except ValueError:
+                    raise ApiError(HTTPStatus.BAD_REQUEST, "invalid order id")
+                order = db.get_order(conn, order_id)
+                if order is None:
+                    raise ApiError(HTTPStatus.NOT_FOUND, "order not found")
+                self._json(HTTPStatus.OK, {"ok": True, "item": order})
+            elif path == "/api/orders":
                 self._json(
                     HTTPStatus.OK,
                     {
@@ -686,6 +695,85 @@ def _ingest_remote(conn: Any, payload: dict[str, Any]) -> dict[str, Any]:
         _insert_order(conn, item)
         order_count += 1
 
+    shipment_count = 0
+    for shipment in payload.get("shipments") or []:
+        if not isinstance(shipment, dict) or not shipment.get("tracking_no"):
+            continue
+        raw = shipment.get("raw")
+        if raw is None and shipment.get("raw_json"):
+            try:
+                raw = json.loads(shipment["raw_json"])
+            except (TypeError, json.JSONDecodeError):
+                raw = None
+        _, changed = db.upsert_shipment(
+            conn,
+            tracking_no=str(shipment["tracking_no"]),
+            carrier=str(shipment.get("carrier") or ""),
+            carrier_name=str(shipment.get("carrier_name") or ""),
+            platform=str(shipment.get("platform") or "jd"),
+            status=str(shipment.get("status") or "unknown"),
+            status_text=str(shipment.get("status_text") or ""),
+            pickup_code=str(shipment.get("pickup_code") or ""),
+            location=str(shipment.get("location") or ""),
+            last_event_at=shipment.get("last_event_at"),
+            raw=raw,
+        )
+        shipment_count += 1
+        if changed and shipment.get("status") in {
+            "out_for_delivery",
+            "ready_for_pickup",
+            "delivered",
+            "returned",
+        }:
+            notifier.notify(
+                conn,
+                kind=f"parcel_{shipment.get('status')}",
+                title=f"{status_label(str(shipment.get('status')))} · {shipment.get('carrier_name') or '包裹'}",
+                body=f"运单 {shipment['tracking_no']}",
+            )
+
+    event_count = 0
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict) or not event.get("tracking_no"):
+            continue
+        if db.add_parcel_event(
+            conn,
+            tracking_no=str(event["tracking_no"]),
+            event_time=event.get("event_time"),
+            context=str(event.get("context") or ""),
+            status=str(event.get("status") or ""),
+            source=str(event.get("source") or "agent"),
+        ):
+            event_count += 1
+
+    link_count = 0
+    for link in payload.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        platform = str(link.get("platform") or "")
+        platform_order_id = str(link.get("platform_order_id") or "")
+        tracking_no = str(link.get("tracking_no") or "").upper()
+        if not platform or not platform_order_id or not tracking_no:
+            continue
+        row = conn.execute(
+            "SELECT id FROM orders WHERE platform=? AND platform_order_id=?",
+            (platform, platform_order_id),
+        ).fetchone()
+        if row is None:
+            continue
+        db.link_order_shipment(
+            conn,
+            order_id=int(row["id"]),
+            tracking_no=tracking_no,
+            package_index=int(link.get("package_index") or 0),
+            source=str(link.get("source") or "agent"),
+        )
+        conn.execute(
+            "UPDATE orders SET tracking_no=COALESCE(tracking_no, ?) WHERE id=?",
+            (tracking_no, int(row["id"])),
+        )
+        link_count += 1
+
     run_count = 0
     for run in runs:
         if not isinstance(run, dict):
@@ -737,6 +825,9 @@ def _ingest_remote(conn: Any, payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "orders": order_count,
+        "shipments": shipment_count,
+        "events": event_count,
+        "links": link_count,
         "runs": run_count,
         "alerts": alert_count,
     }

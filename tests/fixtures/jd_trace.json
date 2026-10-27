@@ -1,0 +1,207 @@
+{
+  "pickDate": 0,
+  "processTimeInfo": {
+    "packageDate": "2026-10-27 <br/> 02:33:45",
+    "pickPayDate": null,
+    "waitReceiptDate": "2026-10-27 <br/> 13:43:50",
+    "sureReceiveMoenyDate": null,
+    "submitDate": "2026-10-27 <br/> 00:41:32",
+    "packageTime": "预计2026-10-27<br/> 11:45:00",
+    "deliveryTime": "预计2026-10-27",
+    "pickDate": null,
+    "loadTime": "预计2026-10-27<br/> 14:00:00",
+    "paySureDate": null
+  },
+  "daJiaDianInstallInfos": [],
+  "multiPackageTrackInfoList": [
+    {
+      "pickInfo": null,
+      "trackGroupInfo": {
+        "orderTrackShowList": [
+          {
+            "CreationTime": "2026-10-27 00:41:32",
+            "Content": "您提交了订单，请等待系统确认",
+            "Operator": "系统",
+            "Status": "",
+            "StatusName": "",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 00:41:37",
+            "Content": "您的订单预计2026-10-27 00:41开始处理，请您耐心等待",
+            "Operator": "系统",
+            "Status": "",
+            "StatusName": "",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 00:41:38",
+            "Content": "您的订单已经进入京东北京仓库准备出库",
+            "Operator": "系统",
+            "Status": "",
+            "StatusName": "",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 01:21:32",
+            "Content": "温馨提示：您的订单预计10月27日15:00-21:00送达",
+            "Operator": "系统",
+            "Status": "0001",
+            "StatusName": "已下单",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 01:32:07",
+            "Content": "您的订单已经打印完成",
+            "Operator": "系统",
+            "Status": "",
+            "StatusName": "",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 02:33:26",
+            "Content": "拣货完成",
+            "Operator": "系统",
+            "Status": "",
+            "StatusName": "",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 02:33:45",
+            "Content": "打包完成",
+            "Operator": "系统",
+            "Status": "0002",
+            "StatusName": "仓库处理中",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 02:50:50",
+            "Content": "您的快件已揽收完成。",
+            "Operator": "系统",
+            "Status": "0004",
+            "StatusName": "已揽收",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 02:51:12",
+            "Content": "您的订单已到达【北京木北综合接货仓】",
+            "Operator": "系统",
+            "Status": "",
+            "StatusName": "",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 02:51:17",
+            "Content": "您的订单已离开【北京木北综合接货仓】，正在发往下一站【北京京北散货分拣中心】的路上",
+            "Operator": "系统",
+            "Status": "",
+            "StatusName": "",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 13:29:49",
+            "Content": "您的订单已到达【北京京北散货分拣中心】",
+            "Operator": "系统",
+            "Status": "",
+            "StatusName": "",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 13:43:50",
+            "Content": "您的订单已离开【北京京北散货分拣中心】，正在发往下一站【北京罗兰香谷站】的路上",
+            "Operator": "系统",
+            "Status": "0005",
+            "StatusName": "运输中",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          },
+          {
+            "CreationTime": "2026-10-27 16:32:15",
+            "Content": "您的订单正在派送中，请您准备签收（快递员：田清涛，电话：<phone>）",
+            "Operator": "系统",
+            "Status": "0006",
+            "StatusName": "派送中",
+            "virtualNumber": null,
+            "virtualNumberText": null,
+            "virtualButtonName": null,
+            "virtualContent": null,
+            "showKjhh": null
+          }
+        ],
+        "orderCarriageInfo": {
+          "carriageId": "JD0266397396896",
+          "carriageUrl": "www.jdwl.com",
+          "carriagePhone": null,
+          "carrier": "京东快递"
+        },
+        "checkCode": null,
+        "shipId": null,
+        "thirdName": null,
+        "waybillSegment": null,
+        "promiseTime": null,
+        "groupType": 0
+      },
+      "carriageInfo": {
+        "carriageId": "JD0266397396896",
+        "carriageUrl": "www.jdwl.com",
+        "carriagePhone": null,
+        "carrier": "京东快递"
+      }
+    }
+  ],
+  "reminderShowBtnFlag": null,
+  "nodeType": 1,
+  "courierInfo": {
+    "courierPageLink": "//map-ql.jd.com/courierHome/index?courierId=20668917&orderId=3664481010490017&passkey=ceed0f51265d32d9424e86a82b8e23ca",
+    "courierNo": 20668917,
+    "courierName": "测试配送员",
+    "courierPhone": "13800000000"
+  }
+}

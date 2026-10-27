@@ -18,13 +18,18 @@ from typing import Any, Iterator
 
 from .. import config
 from ..db import (
+    add_parcel_event,
     finish_collector_run,
+    link_order_shipment,
     session,
     start_collector_run,
     upsert_order,
+    upsert_shipment,
+    utc_now,
 )
-from ..services import notifier
+from ..services import notifier, tracking
 from .jd_parser import order_from_api, parse_jd_orders
+from .jd_trace import parse_jd_trace
 
 log = logging.getLogger(__name__)
 
@@ -238,6 +243,11 @@ def _merge_sources(
                 order["logistics_text"] = dom.get("logistics_text") or ""
             if not order.get("image_url"):
                 order["image_url"] = dom.get("image_url") or ""
+        logistics_text = order.get("logistics_text") or ""
+        if not order.get("tracking_no") and logistics_text:
+            number, _code, _name = tracking.extract(logistics_text)
+            if number:
+                order["tracking_no"] = number
         merged[order_id] = order
     for key, dom in dom_orders.items():
         merged.setdefault(key, dom)
@@ -268,6 +278,154 @@ def _collect_period(
         if captcha or login_required:
             break
     return collected, pages
+
+
+DETAIL_API_HINT = "pcdetail_traceMultiPackage"
+
+
+class TraceSink:
+    """Capture the detail page's multi-package trace XHR."""
+
+    def __init__(self) -> None:
+        self._responses: list[Any] = []
+        self.payloads: list[dict[str, Any]] = []
+
+    def on_response(self, response: Any) -> None:
+        try:
+            if DETAIL_API_HINT in response.url:
+                self._responses.append(response)
+        except Exception:
+            pass
+
+    def drain(self) -> None:
+        while self._responses:
+            response = self._responses.pop(0)
+            try:
+                payload = response.json()
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                self.payloads.append(payload)
+
+
+def _save_trace(order_row_id: int, platform_order_id: str, payload: dict[str, Any]) -> int:
+    packages = parse_jd_trace(payload, platform_order_id)
+    if not packages:
+        return 0
+    with session() as conn:
+        for index, package in enumerate(packages):
+            tracking_no = package["tracking_no"]
+            upsert_shipment(
+                conn,
+                tracking_no=tracking_no,
+                carrier=package.get("carrier") or "",
+                carrier_name=package.get("carrier_name") or "",
+                platform="jd",
+                status=package.get("status") or "unknown",
+                status_text=package.get("status_text") or "",
+                pickup_code=package.get("pickup_code") or "",
+                last_event_at=package.get("last_event_at"),
+                order_id=order_row_id,
+                raw=package.get("raw"),
+            )
+            for event in package.get("events") or []:
+                add_parcel_event(
+                    conn,
+                    tracking_no=tracking_no,
+                    event_time=event.get("time"),
+                    context=event.get("context") or "",
+                    status=event.get("status") or "",
+                    source="jd_detail",
+                )
+            link_order_shipment(
+                conn,
+                order_id=order_row_id,
+                tracking_no=tracking_no,
+                package_index=index,
+                source="jd_detail",
+            )
+        latest = packages[-1]
+        latest_status = latest.get("status") or "unknown"
+        order_status = (
+            "completed"
+            if latest_status == "delivered"
+            else "shipped"
+            if latest_status in {"in_transit", "out_for_delivery", "ready_for_pickup"}
+            else "processing"
+            if latest_status == "processing"
+            else None
+        )
+        conn.execute(
+            "UPDATE orders SET tracking_no=COALESCE(tracking_no, ?), "
+            "logistics_text=COALESCE(NULLIF(?, ''), logistics_text), "
+            "status=COALESCE(?, status), status_text=COALESCE(NULLIF(?, ''), status_text), "
+            "updated_at=? WHERE id=?",
+            (
+                packages[0]["tracking_no"],
+                latest.get("status_text") or "",
+                order_status,
+                latest.get("status_text") or "",
+                utc_now(),
+                order_row_id,
+            ),
+        )
+    return len(packages)
+
+
+def _collect_details(page: Any, orders: list[dict[str, Any]], id_map: dict[str, int]) -> int:
+    if config.JD_DETAIL_MAX <= 0:
+        return 0
+    candidates = [
+        order
+        for order in orders
+        if order.get("url") and order.get("status") in {"shipped", "processing"}
+    ][: config.JD_DETAIL_MAX]
+    enriched = 0
+    for order in candidates:
+        platform_order_id = str(order.get("platform_order_id") or "")
+        row_id = id_map.get(platform_order_id)
+        if not row_id:
+            continue
+        sink = TraceSink()
+        detail_page = None
+        try:
+            detail_page = page.context.new_page()
+            detail_page.on("response", sink.on_response)
+            detail_page.goto(order["url"], wait_until="domcontentloaded", timeout=60_000)
+            detail_page.wait_for_timeout(3_000)
+            sink.drain()
+            if not sink.payloads:
+                for text in ("查看物流", "订单跟踪"):
+                    try:
+                        locator = detail_page.get_by_text(text, exact=False).first
+                        if locator.count() and locator.is_visible():
+                            locator.click(timeout=3_000)
+                            detail_page.wait_for_timeout(2_000)
+                            sink.drain()
+                            break
+                    except Exception:
+                        continue
+            for payload in sink.payloads:
+                enriched += _save_trace(row_id, platform_order_id, payload)
+            log.info(
+                "JD detail order=%s packages=%s",
+                platform_order_id,
+                len(sink.payloads),
+            )
+        except Exception:
+            log.exception("JD detail failed for %s", platform_order_id)
+        finally:
+            if detail_page is not None:
+                try:
+                    detail_page.remove_listener("response", sink.on_response)
+                except Exception:
+                    pass
+                try:
+                    detail_page.close()
+                except Exception:
+                    pass
+            time.sleep(3)
+    return enriched
 
 
 def _debug_dump(page: Any, prefix: str) -> tuple[str, str]:
@@ -420,16 +578,28 @@ def _collect_jd_impl(mode: str = MODE_RECENT) -> dict[str, Any]:
                         push=False,
                     )
 
+            id_map: dict[str, int] = {}
             with session() as conn:
                 for order in orders:
-                    upsert_order(conn, **order)
+                    order_id = upsert_order(conn, **order)
+                    if order.get("platform_order_id"):
+                        id_map[str(order["platform_order_id"])] = order_id
+
+            detail_packages = (
+                0
+                if stop_reason in {"captcha", "login_required"}
+                else _collect_details(page, orders, id_map)
+            )
+
+            with session() as conn:
                 finish_collector_run(
                     conn,
                     run_id,
                     status="partial" if stop_reason else ("ok" if orders else "empty"),
                     items=len(orders),
                     message=(
-                        f"mode={mode} {len(orders)} orders across {pages} page(s) "
+                        f"mode={mode} {len(orders)} orders across {pages} page(s), "
+                        f"{detail_packages} packages "
                         f"in {time.time() - started:.1f}s"
                         + (f" stopped={stop_reason}" if stop_reason else "")
                         + " :: "
@@ -437,15 +607,17 @@ def _collect_jd_impl(mode: str = MODE_RECENT) -> dict[str, Any]:
                     ),
                 )
             log.info(
-                "JD collection: mode=%s %s orders across %s pages",
+                "JD collection: mode=%s %s orders across %s pages, %s packages",
                 mode,
                 len(orders),
                 pages,
+                detail_packages,
             )
             return {
                 "ok": True,
                 "items": len(orders),
                 "pages": pages,
+                "packages": detail_packages,
                 "mode": mode,
                 "stopped": stop_reason or None,
             }

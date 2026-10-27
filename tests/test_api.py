@@ -247,6 +247,63 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(payload["commands"][0]["status"], "ok")
         self.assertTrue(payload["runs"])
 
+    def test_collector_shipment_ingest(self):
+        status, payload, _ = self.request(
+            "POST",
+            "/api/orders",
+            {"platform": "jd", "platform_order_id": "J-TRACE-1", "title": "测试订单"},
+            token="testtoken",
+        )
+        self.assertEqual(status, 200)
+        order_id = payload["id"]
+        status, payload, _ = self.request(
+            "POST",
+            "/api/collector/ingest",
+            {
+                "orders": [],
+                "shipments": [
+                    {
+                        "tracking_no": "JD0266397396896",
+                        "carrier": "京东快递",
+                        "platform": "jd",
+                        "status": "out_for_delivery",
+                        "status_text": "派送中",
+                        "last_event_at": "2026-10-27T16:32:15+08:00",
+                    }
+                ],
+                "events": [
+                    {
+                        "tracking_no": "JD0266397396896",
+                        "event_time": "2026-10-27T16:32:15+08:00",
+                        "context": "您的订单正在派送中",
+                        "status": "out_for_delivery",
+                        "source": "jd_detail",
+                    }
+                ],
+                "links": [
+                    {
+                        "platform": "jd",
+                        "platform_order_id": "J-TRACE-1",
+                        "tracking_no": "JD0266397396896",
+                        "package_index": 0,
+                        "source": "jd_detail",
+                    }
+                ],
+            },
+            token="testtoken",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["shipments"], 1)
+        self.assertEqual(payload["events"], 1)
+        self.assertEqual(payload["links"], 1)
+        status, payload, _ = self.request(
+            "GET", f"/api/orders/{order_id}", token="testtoken"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["item"]["shipments"]), 1)
+        self.assertEqual(payload["item"]["shipments"][0]["tracking_no"], "JD0266397396896")
+        self.assertEqual(len(payload["item"]["shipments"][0]["events"]), 1)
+
     def test_push_subscription(self):
         status, payload, _ = self.request(
             "POST",
