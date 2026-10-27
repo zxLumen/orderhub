@@ -22,6 +22,8 @@
 - 抖音抓屏入库：`POST /api/captures`
 - 手动补单：PWA → 更多 → 手动添加（美团外卖、抖音、任何漏掉的单）
 - 京东采集：CDP 接管真实 Chrome，记录验证码次数
+- 京东物流：从订单详情 `pcdetail_traceMultiPackage` 提取多包裹、运单号、承运商和完整轨迹
+- 订单 ↔ 包裹：`order_shipments` 多对多绑定
 - Web Push：待取件、派送中、签收、外卖状态（需 VAPID 配置）
 - 自动对账基础：订单、包裹、短信统一存库
 - 导出：`/api/export`，JSON 备份
@@ -307,6 +309,7 @@ JD_MAX_SCROLLS=8
 
 - 订单列表接口（`pcorder_center_list`）返回的**整条 JSON 会存进 `orders.raw_json`**：商品、数量、价格与支付方式、店铺、状态、详情页 PassKey、收货信息、按钮配置等
 - 常用字段由它派生到列上：`url`（详情页）、`product_url`（商品页）、`image_url`（商品图）、`logistics_text`（最近物流文案）
+- 在途订单会打开详情页，截获 `pcdetail_traceMultiPackage`，拿到每个包裹的运单号、承运商和完整轨迹；不需要快递100
 - 以后想加字段（支付方式、商品数量、子订单、标签…）**只改读取逻辑，不需要重新采集**
 - 全量采集只跑一次用于补历史；日常定时任务只采近 3 个月
 

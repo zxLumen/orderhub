@@ -477,6 +477,7 @@ def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any] | None:
     result.pop("raw_json", None)
     result["shipments"] = []
     for shipment in list_order_shipments(conn, order_id):
+        shipment.pop("raw_json", None)
         shipment["events"] = [
             dict(event)
             for event in conn.execute(

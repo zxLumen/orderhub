@@ -1,7 +1,11 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from app import config, db
+from app.collectors.jd import _save_trace
 from app.collectors.jd_trace import parse_jd_trace
 from app.services.tracking import extract
 
@@ -20,6 +24,29 @@ class JdTraceTest(unittest.TestCase):
         self.assertEqual(package["status"], "out_for_delivery")
         self.assertEqual(package["status_text"], "派送中")
         self.assertEqual(package["courier"]["courierName"], "测试配送员")
+
+    def test_save_trace_links_order(self):
+        payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "trace.db"
+            with patch.object(config, "DB_PATH", db_path):
+                db.init_db()
+                with db.session() as conn:
+                    order_id = db.upsert_order(
+                        conn,
+                        platform="jd",
+                        platform_order_id="3664481010490017",
+                        title="测试订单",
+                    )
+                count = _save_trace(order_id, "3664481010490017", payload)
+                with db.session() as conn:
+                    order = db.get_order(conn, order_id)
+                    self.assertEqual(count, 1)
+                    self.assertEqual(order["tracking_no"], "JD0266397396896")
+                    self.assertEqual(len(order["shipments"]), 1)
+                    self.assertEqual(order["shipments"][0]["status"], "out_for_delivery")
+                    self.assertGreaterEqual(len(order["shipments"][0]["events"]), 10)
+                    self.assertTrue(db.get_shipment(conn, "JD0266397396896")["events"])
 
     def test_tracking_from_logistics_text(self):
         cases = [
