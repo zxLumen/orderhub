@@ -1,19 +1,27 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("visible", "headless", "stop")]
-    [string]$Mode
+    [string]$Mode,
+    [string]$Url = ""
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $profileDir = Join-Path $root "data\chrome-profile"
 $logPath = Join-Path $root "data\chrome.log"
+$modePath = Join-Path $root "data\chrome-mode.txt"
 $port = 9333
 $cdp = "http://127.0.0.1:$port"
+$jDOrderUrl = "https://order.jd.com/center/list.action"
 
 function Write-Log([string]$Message) {
     $line = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Mode, $Message
     Add-Content -Path $logPath -Value $line -Encoding utf8
+}
+
+function Set-Mode([string]$Value) {
+    # No BOM: the Python agent compares this value verbatim.
+    [System.IO.File]::WriteAllText($modePath, $Value, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 function Find-Chrome {
@@ -69,6 +77,7 @@ function Wait-Cdp {
 
 if ($Mode -eq "stop") {
     Stop-OrderHubChrome
+    Set-Mode "stopped"
     Write-Log "stopped"
     exit 0
 }
@@ -96,9 +105,14 @@ if ($Mode -eq "headless") {
           "(KHTML, like Gecko) Chrome/$major.0.0.0 Safari/537.36"
     $parts = @("--headless=new", "--user-agent=`"$ua`"") + $parts
 }
-$parts += "about:blank"
+$startUrl = "about:blank"
+if ($Mode -eq "visible") {
+    $startUrl = if ($Url) { $Url } else { $jDOrderUrl }
+}
+$parts += $startUrl
 $argLine = $parts -join " "
 
+Set-Mode $Mode
 Write-Log ("starting {0} mode ({1})" -f $Mode, $chrome)
 Start-Process -FilePath $chrome -ArgumentList $argLine | Out-Null
 if (-not (Wait-Cdp)) { exit 1 }

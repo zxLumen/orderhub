@@ -317,6 +317,7 @@ JD_MAX_SCROLLS=8
 
 - **重启电脑不需要重新登录**：登录态存在 profile 的 Cookie 里，通常几周到几个月才失效
 - 采集记录出现 `login_required` 或 `captcha` 时：`scripts\jd_login.bat` → 完成登录/滑块 → `scripts\jd_background.bat` 切回后台
+- agent 上可开 `JD_AUTO_LOGIN=1`：失败后自动把无头 Chrome 换成可见窗口并打开京东订单页；检测到登录成功会自动切回无头并立即补采一次。窗口已开着时不会重复弹
 - 每次运行都会记录在「采集记录」里，方便统计验证码频率
 
 ### 安全

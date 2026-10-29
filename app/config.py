@@ -87,6 +87,7 @@ JD_ORDER_URL = os.environ.get(
     "JD_ORDER_URL", "https://order.jd.com/center/list.action"
 ).strip()
 JD_INTERVAL_SECONDS = int(os.environ.get("JD_INTERVAL_SECONDS", "21600"))
+JD_AUTO_LOGIN = _bool("JD_AUTO_LOGIN", False)
 JD_MAX_PAGES = max(1, int(os.environ.get("JD_MAX_PAGES", "50")))
 JD_MAX_SCROLLS = max(1, int(os.environ.get("JD_MAX_SCROLLS", "8")))
 JD_DETAIL_MAX = max(0, int(os.environ.get("JD_DETAIL_MAX", "10")))

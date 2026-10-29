@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import socket
+import subprocess
 import threading
 import time
 import urllib.error
@@ -32,6 +33,7 @@ log = logging.getLogger(__name__)
 
 VERSION = "0.1.0"
 STATE_FILE = "collector-sync.json"
+CHROME_MODE_FILE = Path(config.BASE_DIR) / "data" / "chrome-mode.txt"
 
 
 class Agent:
@@ -118,6 +120,114 @@ class Agent:
                 return response.status == 200
         except Exception:
             return False
+
+    # ------------------------------------------------------------------
+    # Login watchdog
+    # ------------------------------------------------------------------
+    def _chrome_mode(self) -> str:
+        try:
+            value = CHROME_MODE_FILE.read_text(encoding="utf-8-sig").strip().lower()
+        except OSError:
+            return ""
+        return value.lstrip("\ufeff")
+
+    def _chrome_pages(self) -> list[dict[str, Any]]:
+        try:
+            with urllib.request.urlopen(
+                config.JD_CDP_URL.rstrip("/") + "/json/list", timeout=3
+            ) as response:
+                data = json.loads(response.read().decode("utf-8", "replace"))
+        except Exception:
+            return []
+        return [page for page in data if isinstance(page, dict) and page.get("type") == "page"]
+
+    @staticmethod
+    def _order_page_open(pages: list[dict[str, Any]]) -> bool:
+        """True when a logged-in JD order page is open.
+
+        The pre-login passport URL embeds the order URL in ``ReturnUrl``, and the
+        order URL briefly loads before redirecting, so require both the order
+        host and the logged-in page title.
+        """
+        for page in pages:
+            if page.get("type") not in (None, "page"):
+                continue
+            url = str(page.get("url") or "")
+            title = str(page.get("title") or "")
+            if "order.jd.com" not in url:
+                continue
+            if "passport.jd.com" in url or "login.jd.com" in url:
+                continue
+            if "订单列表" in title:
+                return True
+        return False
+
+    def _switch_chrome(self, mode: str) -> bool:
+        script = Path(config.BASE_DIR) / "scripts" / "chrome_ctl.ps1"
+        if not script.exists():
+            log.error("chrome_ctl.ps1 not found: %s", script)
+            return False
+        log.info("switching chrome to %s", mode)
+        try:
+            subprocess.Popen(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-File",
+                    str(script),
+                    "-Mode",
+                    mode,
+                ],
+                cwd=str(config.BASE_DIR),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            log.error("chrome switch failed: %s", exc)
+            return False
+        for _ in range(60):
+            time.sleep(0.5)
+            if self._chrome_ok() and self._chrome_mode() == mode:
+                return True
+        log.warning("chrome did not switch to %s in time", mode)
+        return False
+
+    def _open_login_window(self) -> None:
+        """Show a visible Chrome at the JD order page, unless one is already up."""
+        if not config.JD_AUTO_LOGIN:
+            return
+        if not self._chrome_ok():
+            # The watchdog restarts Chrome on its own; retry on the next tick.
+            return
+        if self._chrome_mode() == "visible":
+            return
+        log.info("JD login required; opening a visible Chrome window")
+        self._switch_chrome("visible")
+
+    def _ensure_headless(self) -> None:
+        if self._chrome_mode() != "visible":
+            return
+        log.info("JD login restored; switching back to headless")
+        self._switch_chrome("headless")
+
+    def _login_watch(self) -> None:
+        """Keep prompting for a login until JD accepts the session again."""
+        if not config.JD_AUTO_LOGIN or not self._chrome_ok():
+            return
+        if self._chrome_mode() == "visible":
+            if self._order_page_open(self._chrome_pages()):
+                log.info("JD login detected in the visible window")
+                self.state["login_required"] = False
+                self._save_state()
+                if self._switch_chrome("headless"):
+                    self.collect("recent")
+            return
+        if self.state.get("login_required"):
+            self._open_login_window()
 
     def heartbeat(self) -> None:
         try:
@@ -259,6 +369,15 @@ class Agent:
                     )
                 except Exception:
                     pass
+        if result.get("ok"):
+            if self.state.get("login_required"):
+                self.state["login_required"] = False
+                self._save_state()
+            self._ensure_headless()
+        elif result.get("error") in {"login_required", "captcha"}:
+            self.state["login_required"] = True
+            self._save_state()
+            self._open_login_window()
         return result
 
     def maybe_scheduled(self) -> None:
@@ -306,6 +425,7 @@ class Agent:
                     return
                 self.maybe_scheduled()
                 self.poll_command()
+                self._login_watch()
                 if time.time() - self._last_heartbeat > 30:
                     self.heartbeat()
                 if time.time() - self._last_sync > 60:
