@@ -467,15 +467,16 @@ class Agent:
                     )
                 except Exception:
                     pass
-        if result.get("ok"):
-            if self.state.get("login_required"):
-                self.state["login_required"] = False
+        if platform == "jd":
+            if result.get("ok"):
+                if self.state.get("login_required"):
+                    self.state["login_required"] = False
+                    self._save_state()
+                self._ensure_headless()
+            elif result.get("error") in {"login_required", "captcha"}:
+                self.state["login_required"] = True
                 self._save_state()
-            self._ensure_headless()
-        elif result.get("error") in {"login_required", "captcha"}:
-            self.state["login_required"] = True
-            self._save_state()
-            self._open_login_window()
+                self._open_login_window()
         return result
 
     def maybe_scheduled(self) -> None:
