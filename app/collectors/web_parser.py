@@ -321,6 +321,10 @@ def extract_orders(payload: Any, platform: str) -> list[dict[str, Any]]:
         dedicated = parse_pdd_payload(payload)
         if dedicated:
             return _dedupe(dedicated)
+    if platform == "xianyu":
+        dedicated = parse_xianyu_payload(payload)
+        if dedicated:
+            return _dedupe(dedicated)
 
     found: list[dict[str, Any]] = []
     _walk(payload, platform, found)
@@ -655,6 +659,95 @@ def _find_prefix(node: Node, prefix: str) -> Node | None:
         if _has_class_prefix(child, prefix):
             return child
     return None
+
+
+def parse_xianyu_payload(payload: Any) -> list[dict[str, Any]]:
+    """Parse ``mtop.idle.web.trade.bought.list`` (goofish bought orders).
+
+    The rendered card carries no date at all, but the JSON behind it exposes
+    ``head.data.createTime``. Without this parser every Xianyu order is stored
+    with ``order_time = None`` and therefore sorts as the newest order.
+    """
+    items: Any = None
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict):
+            items = data.get("items")
+
+    if not isinstance(items, list):
+        def find(node: Any, depth: int = 0) -> Any:
+            if depth > 5:
+                return None
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "items" and isinstance(value, list):
+                        return value
+                    found = find(value, depth + 1)
+                    if found is not None:
+                        return found
+            elif isinstance(node, list):
+                for value in node:
+                    found = find(value, depth + 1)
+                    if found is not None:
+                        return found
+            return None
+        items = find(payload)
+
+    if not isinstance(items, list):
+        return []
+
+    orders: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        common = item.get("commonData") or {}
+        order_id = str(common.get("orderId") or common.get("orderIdStr") or "").strip()
+        if not order_id:
+            continue
+        head = (item.get("head") or {}).get("data") or {}
+        content = (item.get("content") or {}).get("data") or {}
+        detail = content.get("detailInfo") or {}
+        price_info = content.get("priceInfo") or {}
+        user = head.get("userInfo") or {}
+
+        status, status_text = map_status(head.get("statusViewMsg") or "")
+        title = str(detail.get("auctionTitle") or "").strip()
+        sku = str(detail.get("skuInfo") or "").strip()
+        if sku and sku != "默认":
+            title = f"{title}（{sku}）" if title else sku
+
+        image = str(detail.get("auctionPic") or "").strip()
+        if image.startswith("http://"):
+            image = "https://" + image[len("http://") :]
+
+        item_id = str(common.get("itemId") or "").strip()
+        orders.append(
+            {
+                "platform": "xianyu",
+                "platform_order_id": order_id,
+                "title": (title or f"闲鱼订单 {order_id}")[:300],
+                "shop": str(user.get("userNick") or "")[:120],
+                "amount": _amount(price_info.get("price"), "xianyu", "price"),
+                "status": status,
+                "status_text": status_text[:40],
+                "order_time": _time(head.get("createTime")),
+                "tracking_no": None,
+                "url": f"https://www.goofish.com/order-detail?orderId={order_id}",
+                "product_url": (
+                    f"https://www.goofish.com/item?id={item_id}" if item_id else None
+                ),
+                "image_url": image or None,
+                "source": "agent",
+                "raw": {
+                    "_source": "xianyu_api",
+                    "_platform": "xianyu",
+                    "order_id": order_id,
+                    "create_time": head.get("createTime"),
+                    "status": head.get("statusViewMsg"),
+                },
+            }
+        )
+    return orders
 
 
 def parse_xianyu_html(html: str) -> list[dict[str, Any]]:
