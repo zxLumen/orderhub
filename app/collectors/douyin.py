@@ -165,8 +165,7 @@ def refresh_cookies_from_emulator() -> dict[str, str]:
     if not cookies.get("sessionid"):
         raise DouyinAuthError("douyin_sessionid_missing")
 
-    COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    COOKIE_FILE.write_text(json.dumps(cookies, ensure_ascii=False, indent=1), encoding="utf-8")
+    _save_cookies(cookies)
     log.info("refreshed Douyin cookies from emulator (%s keys)", len(cookies))
     return cookies
 
@@ -198,8 +197,7 @@ def refresh_cookies_from_chrome() -> dict[str, str]:
         raise DouyinAuthError("douyin_not_logged_in_chrome")
     picked = {name: value for name, value in picked.items() if value}
 
-    COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    COOKIE_FILE.write_text(json.dumps(picked, ensure_ascii=False, indent=1), encoding="utf-8")
+    _save_cookies(picked)
     log.info("refreshed Douyin cookies from Chrome (%s keys)", len(picked))
     return picked
 
@@ -217,6 +215,16 @@ def refresh_cookies() -> dict[str, str]:
             errors.append(f"{label}: {exc}")
             log.warning("cookie refresh via %s failed: %s", label, exc)
     raise DouyinAuthError("douyin_login_required (" + "; ".join(errors) + ")")
+
+
+def _save_cookies(cookies: dict[str, str]) -> None:
+    """Persist the live session, readable by the service user only."""
+    COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COOKIE_FILE.write_text(json.dumps(cookies, ensure_ascii=False, indent=1), encoding="utf-8")
+    try:
+        os.chmod(COOKIE_FILE, 0o600)
+    except OSError:  # Windows: ACLs already restrict the profile directory
+        pass
 
 
 def _read_cookie_file() -> dict[str, str] | None:

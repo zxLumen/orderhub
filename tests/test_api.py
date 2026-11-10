@@ -373,7 +373,7 @@ class ApiTest(unittest.TestCase):
         self.assertIn("export", taobao["channels"])
         self.assertEqual(taobao["agent_status"], "ready")
         douyin = next(item for item in platforms["items"] if item["id"] == "douyin")
-        self.assertEqual(douyin["agent_status"], "experimental")
+        self.assertEqual(douyin["agent_status"], "ready")
         self.assertIn("xianyu", [item["id"] for item in platforms["items"]])
 
         status, orders, _ = self.request(
