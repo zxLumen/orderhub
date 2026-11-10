@@ -172,7 +172,7 @@
     try {
       const [stats, orders, parcels, sms, captures, alerts, collector, platforms] = await Promise.all([
         api("/api/stats"),
-        api("/api/orders?limit=50"),
+        api("/api/orders?limit=50" + (state.recentPlatform ? `&platform=${encodeURIComponent(state.recentPlatform)}` : "")),
         api("/api/shipments?limit=100"),
         api("/api/sms?limit=30"),
         api("/api/captures?limit=20"),
@@ -251,7 +251,7 @@
           <div class="card-top">${platformBadge(order.platform)}${status}</div>
           <div class="card-title">${esc(title)}</div>
           ${sub ? `<div class="card-sub">${esc(sub)}</div>` : ""}
-          <div class="card-bottom">${amount}<span class="card-time">${esc(timeText(order.order_time || order.created_at))}</span></div>
+          <div class="card-bottom">${amount}<span class="card-time">${esc(order.order_time ? timeText(order.order_time) : "")}</span></div>
         </div>
       </button>`;
   }
@@ -267,6 +267,19 @@
 
   function chipHtml(item, active) {
     return `<button class="chip${active ? " active" : ""}" data-platform="${esc(item.id)}">${esc(item.label)} <span class="chip-count">${item.orders}</span></button>`;
+  }
+
+  async function selectRecentPlatform(platform) {
+    state.recentPlatform = platform || "";
+    try {
+      const suffix = state.recentPlatform ? `&platform=${encodeURIComponent(state.recentPlatform)}` : "";
+      const data = await api(`/api/orders?limit=50${suffix}`);
+      state.orders = data.items || [];
+    } catch (error) {
+      toast(error.message);
+    }
+    renderPlatformFilters();
+    renderRecent();
   }
 
   function renderPlatformFilters() {
@@ -286,9 +299,7 @@
       recent.innerHTML = `<button class="chip${state.recentPlatform ? "" : " active"}" data-platform="">全部</button>`
         + items.map((item) => chipHtml(item, state.recentPlatform === item.id)).join("");
       $$(".chip", recent).forEach((node) => node.addEventListener("click", () => {
-        state.recentPlatform = node.dataset.platform || "";
-        renderPlatformFilters();
-        renderRecent();
+        selectRecentPlatform(node.dataset.platform || "");
       }));
     }
   }
@@ -324,10 +335,8 @@
     }
     $$(".platform-row", list).forEach((node) => {
       node.addEventListener("click", () => {
-        state.recentPlatform = node.dataset.platform || "";
         switchTab("recent");
-        renderPlatformFilters();
-        renderRecent();
+        selectRecentPlatform(node.dataset.platform || "");
       });
     });
     $$(".mini-btn[data-collect]", list).forEach((node) => {
@@ -360,7 +369,10 @@
         if (order) openOrderSheet(order);
       });
     });
-    $("#recentHint").textContent = `共 ${state.stats?.orders || orders.length} 单`;
+    const current = (state.platforms || []).find((item) => item.id === state.recentPlatform);
+    $("#recentHint").textContent = state.recentPlatform
+      ? `${current ? current.orders || 0 : orders.length} 单`
+      : `共 ${state.stats?.orders || orders.length} 单`;
   }
 
   function renderActivity() {

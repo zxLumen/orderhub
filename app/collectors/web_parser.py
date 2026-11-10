@@ -185,6 +185,13 @@ def _find_key(node: Any, key: str, depth: int = 0) -> Any:
 
 
 def parse_taobao_payload(payload: Any) -> list[dict[str, Any]]:
+    orders = _parse_taobao_main(payload)
+    if orders:
+        return orders
+    return _parse_taobao_graph(payload)
+
+
+def _parse_taobao_main(payload: Any) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
     main = _find_key(payload, "mainOrders")
     if not isinstance(main, list):
@@ -390,6 +397,96 @@ def _maybe(node: dict[str, Any], keys: Iterable[str]) -> Any:
     return None if value is INDEX_NONE else value
 
 
+def _pick(node: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = node.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _web_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return "https:" + text if text.startswith("//") else text
+
+
+# ---------------------------------------------------------------------------
+# Taobao graph payload (mtop.taobao.order.queryboughtlistv2)
+# ---------------------------------------------------------------------------
+def _taobao_graph(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        return data["data"]
+    return data if isinstance(data, dict) else None
+
+
+def _taobao_entry(graph: dict[str, Any], prefix: str, order_id: str) -> dict[str, Any]:
+    exact = f"{prefix}_{order_id}"
+    value = graph.get(exact)
+    if isinstance(value, dict):
+        return value.get("fields") or {}
+    for key, candidate in graph.items():
+        if key.startswith(exact) and isinstance(candidate, dict):
+            return candidate.get("fields") or {}
+    return {}
+
+
+def _parse_taobao_graph(payload: Any) -> list[dict[str, Any]]:
+    """New Taobao order list: a graph of shopInfo/orderItemInfo/orderPayment nodes."""
+    graph = _taobao_graph(payload)
+    if not graph:
+        return []
+    shops = [
+        (key, value)
+        for key, value in graph.items()
+        if key.startswith("shopInfo") and isinstance(value, dict)
+    ]
+    orders: list[dict[str, Any]] = []
+    for key, value in shops:
+        fields = value.get("fields") or {}
+        order_id = str(fields.get("orderId") or key.split("_", 1)[-1]).strip()
+        if not order_id:
+            continue
+
+        item_fields = _taobao_entry(graph, "orderItemInfo", order_id)
+        item = item_fields.get("item") if isinstance(item_fields.get("item"), dict) else {}
+
+        payment = _taobao_entry(graph, "orderPayment", order_id)
+        actual = payment.get("actualFee")
+        actual_amount = actual.get("value") if isinstance(actual, dict) else actual
+
+        status_text = str(fields.get("tradeTitle") or fields.get("orderStatus") or "").strip()
+        status, status_text = map_status(status_text)
+
+        orders.append(
+            {
+                "platform": "taobao",
+                "platform_order_id": order_id,
+                "title": str(item.get("title") or "")[:300],
+                "shop": str(fields.get("shopName") or fields.get("sellerName") or "")[:120],
+                "amount": _amount(actual_amount, "taobao", "actualFee"),
+                "status": status,
+                "status_text": status_text[:40],
+                "order_time": _time(fields.get("createTime")),
+                "tracking_no": None,
+                "url": _web_url(fields.get("orderDetailUrl")) or None,
+                "product_url": _web_url(item.get("itemUrl")) or None,
+                "image_url": _web_url(item.get("pic")) or None,
+                "source": "agent",
+                "raw": {
+                    "_source": "web",
+                    "_platform": "taobao",
+                    "order": {"shop": fields, "item": item, "payment": payment},
+                },
+            }
+        )
+    return orders
+
+
 def parse_pdd_payload(payload: Any) -> list[dict[str, Any]]:
     orders: list[dict[str, Any]] = []
     raw_orders = _find_key(payload, "orders")
@@ -400,15 +497,16 @@ def parse_pdd_payload(payload: Any) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
         order_id = str(
-            raw.get("orderSn")
-            or raw.get("order_sn")
-            or _maybe(raw, ID_KEYS["pdd"])
-            or ""
+            _pick(raw, "orderSn", "order_sn", "orderId", "order_id") or ""
         ).strip()
         if not order_id:
             continue
 
-        goods = [item for item in (raw.get("orderGoods") or []) if isinstance(item, dict)]
+        goods = [
+            item
+            for item in (raw.get("orderGoods") or raw.get("order_goods") or [])
+            if isinstance(item, dict)
+        ]
         titles: list[str] = []
         for item in goods:
             name = str(item.get("goodsName") or item.get("goods_name") or "").strip()
@@ -417,9 +515,17 @@ def parse_pdd_payload(payload: Any) -> list[dict[str, Any]]:
         title = " / ".join(titles) if titles else _text(_maybe(raw, TITLE_KEYS))
 
         mall = raw.get("mall") if isinstance(raw.get("mall"), dict) else {}
-        shop = str(mall.get("mallName") or "").strip() or _text(_maybe(raw, SHOP_KEYS))
+        shop = (
+            str(mall.get("mallName") or mall.get("mall_name") or "").strip()
+            or _text(_maybe(raw, SHOP_KEYS))
+        )
 
-        prompt = str(raw.get("orderStatusPrompt") or raw.get("statusDesc") or "").strip()
+        prompt = str(
+            raw.get("orderStatusPrompt")
+            or raw.get("order_status_prompt")
+            or raw.get("statusDesc")
+            or ""
+        ).strip()
         status, status_text = map_status(prompt)
         if status == "unknown":
             generic_status = _maybe(raw, STATUS_KEYS)
@@ -433,7 +539,15 @@ def parse_pdd_payload(payload: Any) -> list[dict[str, Any]]:
                 status, status_text = PDD_STATUS.get(code, ("unknown", prompt))
 
         amount = None
-        for key in ("orderAmount", "displayAmount", "payAmount", "actualFee"):
+        for key in (
+            "orderAmount",
+            "order_amount",
+            "displayAmount",
+            "display_amount",
+            "payAmount",
+            "pay_amount",
+            "actualFee",
+        ):
             if raw.get(key) is not None:
                 amount = _amount(raw[key], "pdd", key)
                 if amount is not None:
@@ -441,19 +555,21 @@ def parse_pdd_payload(payload: Any) -> list[dict[str, Any]]:
         if amount is None:
             amount = _amount(_maybe(raw, AMOUNT_KEYS), "pdd")
 
-        link = str(raw.get("orderLinkUrl") or "").strip()
+        link = str(_pick(raw, "orderLinkUrl", "order_link_url") or "").strip()
         if not link:
             link = _text(_maybe(raw, URL_KEYS))
         if link and not link.startswith("http"):
             link = "https://mobile.yangkeduo.com/" + link.lstrip("/")
 
-        image = str((goods[0].get("thumbUrl") if goods else "") or "").strip()
+        image = str(
+            (goods[0].get("thumbUrl") or goods[0].get("thumb_url") if goods else "") or ""
+        ).strip()
         if not image:
             image = _text(_maybe(raw, IMAGE_KEYS))
 
-        tracking = str(raw.get("trackingNumber") or "").strip() or _text(
-            _maybe(raw, TRACKING_KEYS)
-        )
+        tracking = str(
+            _pick(raw, "trackingNumber", "tracking_number") or ""
+        ).strip() or _text(_maybe(raw, TRACKING_KEYS))
 
         orders.append(
             {
@@ -464,7 +580,9 @@ def parse_pdd_payload(payload: Any) -> list[dict[str, Any]]:
                 "amount": amount,
                 "status": status,
                 "status_text": status_text[:40],
-                "order_time": _time(raw.get("orderTime") or _maybe(raw, TIME_KEYS)),
+                "order_time": _time(
+                    _pick(raw, "orderTime", "order_time") or _maybe(raw, TIME_KEYS)
+                ),
                 "tracking_no": tracking or None,
                 "url": link or None,
                 "product_url": None,

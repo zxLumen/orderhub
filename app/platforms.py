@@ -48,8 +48,8 @@ PLATFORMS: dict[str, dict[str, Any]] = {
     },
     "douyin": {
         "label": "抖音",
-        "order_url": "https://www.douyin.com/",
-        "login_url": "https://www.douyin.com/",
+        "order_url": "https://www.douyin.com/user/self",
+        "login_url": "https://www.douyin.com/user/self",
         "agent_status": "experimental",
         "channels": ["agent", "export", "sms", "bill", "manual"],
         "import_hint": "抖音 App → 我 → 抖音商城 → 订单 → 客服/设置 → 个人信息副本；支付记录在支付宝/微信账单里。",

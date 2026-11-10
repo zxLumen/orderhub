@@ -282,6 +282,82 @@ class PddParserTest(unittest.TestCase):
         self.assertEqual(orders[0]["platform_order_id"], "260101-000000000000001")
 
 
+class TaobaoGraphTest(unittest.TestCase):
+    PAYLOAD = {
+        "data": {
+            "data": {
+                "shopInfo_1": {
+                    "fields": {
+                        "orderId": "1",
+                        "createTime": "2026-10-01 16:09:03",
+                        "shopName": "微雪电子waveshare代理店",
+                        "sellerName": "深圳微雪",
+                        "tradeTitle": "交易成功",
+                        "orderDetailUrl": "//trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=1",
+                    }
+                },
+                "orderItemInfo_1_1": {
+                    "fields": {
+                        "item": {
+                            "title": "微雪 ESP32-S3 AMOLED 开发板",
+                            "pic": "//img.alicdn.com/a.jpg",
+                            "itemUrl": "https://item.taobao.com/item.htm?id=1",
+                        }
+                    }
+                },
+                "orderPayment_1": {"fields": {"actualFee": {"value": "￥244.00"}}},
+            }
+        }
+    }
+
+    def test_graph_shape(self):
+        orders = extract_orders(self.PAYLOAD, "taobao")
+        self.assertEqual(len(orders), 1)
+        order = orders[0]
+        self.assertEqual(order["platform_order_id"], "1")
+        self.assertEqual(order["title"], "微雪 ESP32-S3 AMOLED 开发板")
+        self.assertEqual(order["shop"], "微雪电子waveshare代理店")
+        self.assertAlmostEqual(order["amount"], 244.0)
+        self.assertEqual(order["status"], "completed")
+        self.assertTrue(order["order_time"].startswith("2026-10-01"))
+        self.assertEqual(order["url"], "https://trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=1")
+        self.assertEqual(order["image_url"], "https://img.alicdn.com/a.jpg")
+
+
+class PddSnakeCaseTest(unittest.TestCase):
+    PAYLOAD = {
+        "orders": [
+            {
+                "order_sn": "260703-310357584203200",
+                "order_time": 1783044923,
+                "order_amount": 7580,
+                "order_status_prompt": "交易成功",
+                "tracking_number": "SF5117819633820",
+                "mall": {"mall_name": "MUVNA官方旗舰店"},
+                "order_goods": [
+                    {
+                        "goods_name": "MUVNA意式咖啡布粉器",
+                        "thumb_url": "https://img.pddpic.com/a.jpeg",
+                    }
+                ],
+            }
+        ]
+    }
+
+    def test_snake_case_order(self):
+        orders = extract_orders(self.PAYLOAD, "pdd")
+        self.assertEqual(len(orders), 1)
+        order = orders[0]
+        self.assertEqual(order["platform_order_id"], "260703-310357584203200")
+        self.assertEqual(order["title"], "MUVNA意式咖啡布粉器")
+        self.assertEqual(order["shop"], "MUVNA官方旗舰店")
+        self.assertAlmostEqual(order["amount"], 75.8)
+        self.assertEqual(order["status"], "completed")
+        self.assertTrue(order["order_time"].startswith("2026-"))
+        self.assertEqual(order["tracking_no"], "SF5117819633820")
+        self.assertEqual(order["image_url"], "https://img.pddpic.com/a.jpeg")
+
+
 class XianyuHtmlTest(unittest.TestCase):
     HTML = """
     <div class="container--card">

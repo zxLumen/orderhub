@@ -40,7 +40,7 @@ SUPPORTED = ("taobao", "pdd", "douyin", "xianyu", "zhuanzhuan")
 DEFAULT_URLS = {
     "taobao": "https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm",
     "pdd": "https://mobile.yangkeduo.com/orders.html",
-    "douyin": "https://www.douyin.com/",
+    "douyin": "https://www.douyin.com/user/self",
     "xianyu": "https://www.goofish.com/bought",
     "zhuanzhuan": "https://www.zhuanzhuan.com/",
 }
@@ -49,7 +49,7 @@ DEFAULT_URLS = {
 # homepage and follow visible entries. If the platform changed them, set
 # ORDERHUB_URL_<PLATFORM> to the URL copied from the logged-in Chrome tab.
 NAV_TEXTS = {
-    "douyin": ("商城", "我的订单", "订单"),
+    "douyin": ("我的订单", "订单", "商城", "我的"),
     "zhuanzhuan": ("我的", "我的订单", "我买到的", "购买"),
     "xianyu": ("我的", "我的订单"),
 }
@@ -57,7 +57,7 @@ NAV_TEXTS = {
 LOGIN_URLS = {
     "taobao": "https://login.taobao.com/",
     "pdd": "https://mobile.yangkeduo.com/login.html",
-    "douyin": "https://www.douyin.com/",
+    "douyin": "https://www.douyin.com/user/self",
     "xianyu": "https://www.goofish.com/",
     "zhuanzhuan": "https://m.zhuanzhuan.com/",
 }
@@ -81,7 +81,17 @@ CAPTCHA_WORDS = (
     "安全验证", "请完成验证", "拖动滑块", "滑块验证", "验证码", "访问过于频繁",
     "操作频繁", "请稍后再试", "人机验证", "risk",
 )
-LOGIN_WORDS = ("请登录", "登录后", "扫码登录", "密码登录", "手机号登录", "立即登录")
+LOGIN_WORDS = (
+    "请登录",
+    "登录后",
+    "扫码登录",
+    "密码登录",
+    "手机号登录",
+    "立即登录",
+    "登录",
+    "Log in to Douyin",
+    "Scan to Log In",
+)
 INVALID_WORDS = ("页面不存在", "404 Not Found", "访问的页面不存在", "页面走丢了")
 ORDER_WORDS = ("全部订单", "我的订单", "订单号", "待收货", "待发货", "已完成", "暂无订单")
 
@@ -117,6 +127,15 @@ def page_state(url: str, title: str, body: str) -> str:
     return "ok"
 
 
+ORDER_URL_HINTS: dict[str, tuple[str, ...]] = {
+    "taobao": ("queryboughtlist", "orderlist", "order_list", "trade"),
+    "pdd": ("order_list", "my_order"),
+    "douyin": ("order",),
+    "xianyu": ("order", "trade"),
+    "zhuanzhuan": ("order", "trade"),
+}
+
+
 class JsonSink:
     """Capture JSON responses, but read bodies outside the event handler."""
 
@@ -131,6 +150,11 @@ class JsonSink:
         try:
             content_type = (response.headers.get("content-type") or "").lower()
             if "json" not in content_type:
+                return
+            hints = ORDER_URL_HINTS.get(self.platform, ("order",))
+            if not any(hint in response.url.lower() for hint in hints):
+                # Skip analytics/recommend/stream endpoints: some never finish
+                # and reading their body would block the collector forever.
                 return
             length = response.headers.get("content-length")
             if length and int(length) > 4 * 1024 * 1024:
@@ -150,7 +174,27 @@ class JsonSink:
             except Exception:
                 continue
             for order in extract_orders(payload, self.platform):
-                self.orders.setdefault(order["platform_order_id"], order)
+                order_id = order["platform_order_id"]
+                existing = self.orders.get(order_id)
+                if existing is None:
+                    self.orders[order_id] = order
+                    continue
+                # A bare order (id only) often arrives before the rich one.
+                for field in (
+                    "title",
+                    "shop",
+                    "amount",
+                    "order_time",
+                    "tracking_no",
+                    "url",
+                    "product_url",
+                    "image_url",
+                    "status_text",
+                ):
+                    if not existing.get(field) and order.get(field):
+                        existing[field] = order[field]
+                if existing.get("status") in (None, "", "unknown") and order.get("status"):
+                    existing["status"] = order["status"]
 
 
 def _prepare_mobile(page: Any) -> None:
@@ -282,13 +326,18 @@ def _collect_impl(platform: str) -> dict[str, Any]:
                 _prepare_mobile(page)
             sink = JsonSink(platform)
             page.on("response", sink.on_response)
+            log.info("%s: navigating to %s", platform, url)
             page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            log.info("%s: domcontentloaded %s", platform, page.url)
             page.wait_for_timeout(3_000)
+            log.info("%s: draining %s responses", platform, sink.seen)
             sink.drain()
+            log.info("%s: drained", platform)
 
             title = page.title()
             body = page.inner_text("body")[:30_000] if page.locator("body").count() else ""
             state = page_state(page.url, title, body)
+            log.info("%s: state=%s title=%s", platform, state, title[:60])
 
             if state == "invalid_page":
                 for _ in range(3):
@@ -334,6 +383,7 @@ def _collect_impl(platform: str) -> dict[str, Any]:
                 max_scrolls=max(1, config.WEB_MAX_SCROLLS),
                 max_pages=max(0, config.WEB_MAX_PAGES),
             )
+            log.info("%s: scrolled pages=%s", platform, pages)
             sink.drain()
             orders = list(sink.orders.values())
 
