@@ -51,8 +51,8 @@ PLATFORMS: dict[str, dict[str, Any]] = {
         "order_url": "https://www.douyin.com/user/self",
         "login_url": "https://www.douyin.com/user/self",
         "agent_status": "experimental",
-        "channels": ["agent", "export", "sms", "bill", "manual"],
-        "import_hint": "抖音 App → 我 → 抖音商城 → 订单 → 客服/设置 → 个人信息副本；支付记录在支付宝/微信账单里。",
+        "channels": ["export", "sms", "bill", "manual"],
+        "import_hint": "抖音网页版没有消费者订单页（已实测），请用 App → 我 → 抖音商城 → 订单 → 客服/设置 → 个人信息副本，导出后在这里导入。",
         "keywords": ("抖音", "抖店", "抖音商城", "字节", "微播视界", "火山引擎", "抖音电商"),
     },
     "xianyu": {

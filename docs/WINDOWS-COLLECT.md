@@ -1,7 +1,7 @@
 # Windows 五平台采集 · 10 分钟验收
 
 目标：把这台 Windows 的 agent 从 v0.1.0 升到 v0.4.0，采到淘宝 / 拼多多 / 闲鱼的真实订单。
-抖音、转转的网页订单入口不稳定，先跳过；要试就先设 URL 覆盖（见文末）。
+抖音网页版没有消费者订单页（实测），只能用个人信息副本导入；转转的网页入口同样不稳定，先跳过。
 
 ## 1. 升级 agent（约 1 分钟）
 
@@ -51,12 +51,13 @@
 | `invalid_page` | 订单页 URL 变了 | 在仓库 `.env` 设 `ORDERHUB_URL_TAOBAO=<登录后订单页地址>`，重跑 `update_agent.bat` |
 | `ok · 0 条` | 页面结构变了，解析没命中 | 把 `data/debug/<平台>-empty-*.html/.png` 回传，改 `app/collectors/web_parser.py` |
 
-## 抖音 / 转转（可选）
+## 抖音 / 转转
 
-两者默认从首页导航，实测没有稳定订单入口：
+抖音没有可用的网页订单页：`douyin.com/user/self` 登录后也没有订单入口，`/shop` 是 404，`haohuo.jinritemai.com` 的 H5 订单页需要 App 内 token，桌面 Chrome 打开只会报「网络异常」。抖音订单请用 App 导出个人信息副本后在这里导入。
+
+转转同样没有稳定的公开订单页，没有可用 URL 时走导入。如果你确实找到了可用的订单页地址，可以覆盖：
 
 ```ini
-ORDERHUB_URL_DOUYIN=<登录后订单页地址>
 ORDERHUB_URL_ZHUANZHUAN=<登录后订单页地址>
 ```
 
