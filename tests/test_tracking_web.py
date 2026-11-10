@@ -67,6 +67,30 @@ class TrackingStoreTest(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"], "查无结果")
 
+    def test_rejects_recycled_waybill_trace(self):
+        db.upsert_shipment(
+            self.conn,
+            tracking_no="JD0266708738659",
+            carrier="jd",
+            status="in_transit",
+            last_event_at="2026-10-29T11:00:00+08:00",
+        )
+        self.conn.commit()
+        result = {
+            "ok": True,
+            "type": "jd",
+            "carrier_name": "京东物流",
+            "state": "delivered",
+            "events": [{"time": "2023-06-08 13:17:51", "context": "快件被签收", "status": ""}],
+        }
+        with patch.object(ingest.kuaidi_web, "query", return_value=result):
+            out = ingest.query_tracking(self.conn, "JD0266708738659")
+        self.assertFalse(out["ok"])
+        self.assertIn("丢弃", out["error"])
+        shipment = db.get_shipment(self.conn, "JD0266708738659")
+        self.assertEqual(shipment["status"], "in_transit")
+        self.assertEqual(shipment["events"], [])
+
     def test_poll_uses_web_when_paid_missing(self):
         db.upsert_shipment(
             self.conn,

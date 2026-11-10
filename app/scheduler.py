@@ -11,6 +11,7 @@ from datetime import datetime
 from . import config
 from .collectors.jd import collect_jd
 from .db import session
+from .services import kuaidi100
 from .services.ingest import poll_parcels
 
 log = logging.getLogger(__name__)
@@ -40,9 +41,13 @@ class Scheduler:
             now = time.time()
             if now >= self._next_parcel:
                 self._next_parcel = now + max(300, config.PARCEL_POLL_SECONDS)
-                # Paid API when configured; otherwise the free web lookup is
-                # always available (no key required).
-                threading.Thread(target=self._run_parcel, daemon=True).start()
+                # Paid API when configured. The free web lookup is best-effort
+                # (rate-limited, sometimes recycles waybill numbers), so it is
+                # manual-only unless ORDERHUB_FREE_TRACKING_POLL=1.
+                if kuaidi100.configured() or config.FREE_TRACKING_POLL:
+                    threading.Thread(target=self._run_parcel, daemon=True).start()
+                else:
+                    log.debug("Parcel polling skipped: no paid key and free polling disabled")
             if config.ENABLE_JD_COLLECTOR and now >= self._next_jd:
                 interval = max(1800, config.JD_INTERVAL_SECONDS)
                 last = self._last_jd_run_at()

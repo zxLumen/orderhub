@@ -93,6 +93,10 @@ JD_MAX_SCROLLS = max(1, int(os.environ.get("JD_MAX_SCROLLS", "8")))
 JD_DETAIL_MAX = max(0, int(os.environ.get("JD_DETAIL_MAX", "10")))
 PARCEL_POLL_SECONDS = int(os.environ.get("PARCEL_POLL_SECONDS", "1800"))
 
+# The free kuaidi100 web endpoint rate-limits hard and its data is best effort.
+# Automatic polling stays off unless explicitly enabled; manual lookups still work.
+FREE_TRACKING_POLL = _bool("ORDERHUB_FREE_TRACKING_POLL", False)
+
 # Keep a sane upper bound on request bodies (screenshots are sent as text).
 MAX_BODY_BYTES = int(os.environ.get("ORDERHUB_MAX_BODY", str(8 * 1024 * 1024)))
 

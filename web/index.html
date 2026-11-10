@@ -97,11 +97,12 @@
         </div>
 
         <div class="panel">
-          <div class="panel-head"><h2>补物流</h2><span class="muted">快递100 免 key</span></div>
+          <div class="panel-head"><h2>补物流</h2><span class="muted">快递100 公开接口 · 可能限流</span></div>
           <div class="button-row">
             <input id="trackingInput" placeholder="运单号，例如 SF1234567890123" autocomplete="off">
             <button class="btn" id="trackingBtn">查询</button>
           </div>
+          <p class="muted small" style="margin:8px 0 0">免 key 查询只适合手动补单；公开接口会限流，查不到就过几分钟再试。轨迹时间早于订单一个月会被丢弃。</p>
           <div id="trackingResult" class="muted small"></div>
         </div>
 

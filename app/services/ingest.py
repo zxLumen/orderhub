@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .. import config
@@ -333,6 +333,20 @@ def _apply_tracking_result(
     latest_event_at = max((value for value in event_times if value), default=None)
     latest_event_at = latest_event_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+    # Refuse traces that predate the parcel by a month. Public aggregators
+    # recycle waybill numbers and occasionally return an old parcel; writing
+    # that into a new order is worse than showing "查不到".
+    created_at = normalize_time(shipment.get("created_at"))
+    if created_at and latest_event_at:
+        try:
+            created_dt = datetime.fromisoformat(created_at)
+            latest_dt = datetime.fromisoformat(latest_event_at)
+            if latest_dt < created_dt - timedelta(days=30):
+                result["rejected"] = "stale_trace"
+                return False
+        except ValueError:
+            pass
+
     carrier = kuaidi_web.normalize_carrier(shipment.get("carrier") or "")
     if not carrier:
         carrier = kuaidi_web.CODE_BY_TYPE.get(str(result.get("type") or ""), "")
@@ -415,6 +429,12 @@ def query_tracking(conn: sqlite3.Connection, tracking_no: str, carrier: str = ""
         }
 
     changed = _apply_tracking_result(conn, shipment=shipment, result=result, source=source)
+    if result.get("rejected") == "stale_trace":
+        return {
+            "ok": False,
+            "error": "轨迹时间与订单不符（疑似单号复用），已丢弃",
+            "tracking_no": tracking_no.upper(),
+        }
     return {
         "ok": True,
         "tracking_no": tracking_no.upper(),
