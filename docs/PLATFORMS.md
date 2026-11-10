@@ -55,7 +55,7 @@ PWA → 更多 → 导入订单，支持：
 
 ## 浏览器采集（Windows agent）
 
-Windows 上的 `app.collector_agent` 除了京东，还能采集淘宝、拼多多、抖音、闲鱼、转转：
+Windows 上的 `app.collector_agent` 除了京东，还能采集淘宝、拼多多、抖音、闲鱼、转转。按 [WINDOWS-COLLECT.md](WINDOWS-COLLECT.md) 的三步跑：升级 agent → 登录三平台 → 点采集。
 
 1. 在这台 Windows 的 Chrome 9333 里登录对应平台（验证码/滑块要人工过）。
 2. PWA → 更多 → 平台覆盖 → 点该平台「采集」；或命令行：
