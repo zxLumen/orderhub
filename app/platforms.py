@@ -57,7 +57,7 @@ PLATFORMS: dict[str, dict[str, Any]] = {
     },
     "xianyu": {
         "label": "闲鱼",
-        "order_url": "https://www.goofish.com/",
+        "order_url": "https://www.goofish.com/bought",
         "login_url": "https://www.goofish.com/",
         "agent_status": "ready",
         "channels": ["agent", "export", "sms", "bill", "manual"],

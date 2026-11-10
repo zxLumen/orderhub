@@ -1,7 +1,14 @@
 import unittest
 
 from app.collectors.web import DEFAULT_URLS, page_state
-from app.collectors.web_parser import extract_orders, parse_order_text
+from app.collectors.web_parser import (
+    extract_embedded_payloads,
+    extract_orders,
+    parse_html_orders,
+    parse_order_text,
+    parse_pdd_payload,
+    parse_xianyu_html,
+)
 
 
 class TaobaoParserTest(unittest.TestCase):
@@ -198,6 +205,119 @@ class PageStateTest(unittest.TestCase):
     def test_default_urls_present(self):
         self.assertEqual(set(DEFAULT_URLS), {"taobao", "pdd", "douyin", "xianyu", "zhuanzhuan"})
         self.assertTrue(all(DEFAULT_URLS.values()))
+
+
+class PddParserTest(unittest.TestCase):
+    PAYLOAD = {
+        "ordersStore": {
+            "orders": [
+                {
+                    "orderSn": "261001-277390354763200",
+                    "orderAmount": "27.89",
+                    "displayAmount": 2789,
+                    "orderTime": 1790837383,
+                    "status": 4,
+                    "orderStatusPrompt": "交易成功",
+                    "trackingNumber": "79146268267530",
+                    "orderLinkUrl": "order.html?order_sn=261001-277390354763200",
+                    "mall": {"mallName": "启智毛毡"},
+                    "orderGoods": [
+                        {
+                            "goodsName": "便携式1000块加厚毛毡拼图板",
+                            "thumbUrl": "https://img.pddpic.com/example.jpeg",
+                        }
+                    ],
+                },
+                {
+                    "orderSn": "260711-596388135243200",
+                    "orderAmount": "9.88",
+                    "orderTime": 1783758527,
+                    "status": 4,
+                    "orderStatusPrompt": "拼过2次",
+                    "mall": {"mallName": "珍辰模型"},
+                    "orderGoods": [{"goodsName": "清仓模型零件收纳架"}],
+                },
+            ]
+        }
+    }
+
+    def test_parse_orders(self):
+        orders = parse_pdd_payload(self.PAYLOAD)
+        self.assertEqual(len(orders), 2)
+
+        first = orders[0]
+        self.assertEqual(first["platform"], "pdd")
+        self.assertEqual(first["platform_order_id"], "261001-277390354763200")
+        self.assertEqual(first["title"], "便携式1000块加厚毛毡拼图板")
+        self.assertEqual(first["shop"], "启智毛毡")
+        self.assertAlmostEqual(first["amount"], 27.89)
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(first["status_text"], "交易成功")
+        self.assertIsNotNone(first["order_time"])
+        self.assertEqual(first["tracking_no"], "79146268267530")
+        self.assertTrue(first["url"].startswith("https://mobile.yangkeduo.com/order.html"))
+        self.assertEqual(first["image_url"], "https://img.pddpic.com/example.jpeg")
+        self.assertEqual(first["raw"]["order"]["orderSn"], "261001-277390354763200")
+
+    def test_group_prompt_falls_back_to_status_code(self):
+        orders = parse_pdd_payload(self.PAYLOAD)
+        second = orders[1]
+        self.assertEqual(second["status"], "completed")
+
+    def test_extract_orders_dispatch(self):
+        orders = extract_orders(self.PAYLOAD, "pdd")
+        self.assertEqual(len(orders), 2)
+
+    def test_embedded_raw_data(self):
+        html = (
+            "<html><script>window.rawData="
+            '{"ordersStore":{"orders":[{"orderSn":"260101-000000000000001",'
+            '"orderAmount":"1.00","status":4}]}};'
+            "</script></html>"
+        )
+        payloads = extract_embedded_payloads(html, "pdd")
+        self.assertEqual(len(payloads), 1)
+        orders = extract_orders(payloads[0], "pdd")
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["platform_order_id"], "260101-000000000000001")
+
+
+class XianyuHtmlTest(unittest.TestCase):
+    HTML = """
+    <div class="container--card">
+      <div class="container--head">
+        <a class="left--seller" href="https://www.goofish.com/personal?userId=1">
+          <div class="name--seller"><span>卖家A</span></div>
+        </a>
+        <div class="status--state"><span>交易成功</span></div>
+      </div>
+      <div class="container--main">
+        <div class="picture--pic"><img src="//img.alicdn.com/item.jpg"></div>
+        <a class="info--link" href="https://www.goofish.com/order-detail?orderId=5127877909065017624">
+          <div class="desc--d"><div class="name--product">测试商品</div></div>
+          <div class="price--p"><span>¥</span><span>930</span><span>.00</span></div>
+        </a>
+      </div>
+    </div>
+    """
+
+    def test_parse_cards(self):
+        orders = parse_xianyu_html(self.HTML)
+        self.assertEqual(len(orders), 1)
+        order = orders[0]
+        self.assertEqual(order["platform"], "xianyu")
+        self.assertEqual(order["platform_order_id"], "5127877909065017624")
+        self.assertEqual(order["title"], "测试商品")
+        self.assertEqual(order["shop"], "卖家A")
+        self.assertAlmostEqual(order["amount"], 930.0)
+        self.assertEqual(order["status"], "completed")
+        self.assertEqual(order["status_text"], "交易成功")
+        self.assertEqual(order["url"], "https://www.goofish.com/order-detail?orderId=5127877909065017624")
+        self.assertEqual(order["image_url"], "https://img.alicdn.com/item.jpg")
+
+    def test_html_dispatch(self):
+        self.assertEqual(len(parse_html_orders(self.HTML, "xianyu")), 1)
+        self.assertEqual(parse_html_orders(self.HTML, "taobao"), [])
 
 
 if __name__ == "__main__":

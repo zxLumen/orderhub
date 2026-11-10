@@ -29,7 +29,7 @@ from ..db import (
     upsert_order,
 )
 from ..services import notifier
-from .web_parser import extract_orders, parse_order_text
+from .web_parser import extract_orders, parse_html_orders, parse_order_text
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ DEFAULT_URLS = {
     "taobao": "https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm",
     "pdd": "https://mobile.yangkeduo.com/orders.html",
     "douyin": "https://www.douyin.com/",
-    "xianyu": "https://www.goofish.com/personal?tab=order",
+    "xianyu": "https://www.goofish.com/bought",
     "zhuanzhuan": "https://www.zhuanzhuan.com/",
 }
 
@@ -336,6 +336,11 @@ def _collect_impl(platform: str) -> dict[str, Any]:
             )
             sink.drain()
             orders = list(sink.orders.values())
+
+            # PDD/闲鱼 render their lists in the document rather than an XHR,
+            # so the response sniffer never sees them.
+            if not orders:
+                orders = parse_html_orders(page.content(), platform)
 
             if not orders:
                 orders = parse_order_text(body, platform)

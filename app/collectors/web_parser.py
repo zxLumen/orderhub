@@ -12,12 +12,14 @@ Every function here is pure Python and testable without a browser.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from .. import platforms
 from ..db import normalize_time
+from .html_dom import Node, parse_html
 
 # ---------------------------------------------------------------------------
 # Field aliases
@@ -308,10 +310,170 @@ def extract_orders(payload: Any, platform: str) -> list[dict[str, Any]]:
         dedicated = parse_taobao_payload(payload)
         if dedicated:
             return _dedupe(dedicated)
+    if platform == "pdd":
+        dedicated = parse_pdd_payload(payload)
+        if dedicated:
+            return _dedupe(dedicated)
 
     found: list[dict[str, Any]] = []
     _walk(payload, platform, found)
     return _dedupe(found)
+
+
+# ---------------------------------------------------------------------------
+# Pinduoduo dedicated parser
+# ---------------------------------------------------------------------------
+PDD_STATUS = {
+    4: ("completed", "交易成功"),
+    6: ("refunded", "退款成功"),
+}
+EMBEDDED_MARKERS: dict[str, tuple[str, ...]] = {
+    "pdd": ("window.rawData=",),
+}
+
+
+def _balanced_json(text: str, start: int) -> Any | None:
+    """Parse a JSON object starting at ``start`` with string-aware braces."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : index + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
+def extract_embedded_payloads(html: str, platform: str) -> list[Any]:
+    """Pull JSON the page embeds in the HTML instead of fetching over XHR.
+
+    Pinduoduo renders its order list from ``window.rawData`` in the document, so
+    the response sniffer never sees it.
+    """
+    payloads: list[Any] = []
+    for marker in EMBEDDED_MARKERS.get(platform, ()):
+        start = 0
+        while True:
+            index = html.find(marker, start)
+            if index < 0:
+                break
+            begin = index + len(marker)
+            while begin < len(html) and html[begin] in " \t\r\n":
+                begin += 1
+            if begin < len(html) and html[begin] == "{":
+                payload = _balanced_json(html, begin)
+                if payload is not None:
+                    payloads.append(payload)
+            start = max(begin, index + len(marker))
+    return payloads
+
+
+def _maybe(node: dict[str, Any], keys: Iterable[str]) -> Any:
+    value = _get(node, keys)
+    return None if value is INDEX_NONE else value
+
+
+def parse_pdd_payload(payload: Any) -> list[dict[str, Any]]:
+    orders: list[dict[str, Any]] = []
+    raw_orders = _find_key(payload, "orders")
+    if not isinstance(raw_orders, list):
+        return orders
+
+    for raw in raw_orders:
+        if not isinstance(raw, dict):
+            continue
+        order_id = str(
+            raw.get("orderSn")
+            or raw.get("order_sn")
+            or _maybe(raw, ID_KEYS["pdd"])
+            or ""
+        ).strip()
+        if not order_id:
+            continue
+
+        goods = [item for item in (raw.get("orderGoods") or []) if isinstance(item, dict)]
+        titles: list[str] = []
+        for item in goods:
+            name = str(item.get("goodsName") or item.get("goods_name") or "").strip()
+            if name and name not in titles:
+                titles.append(name)
+        title = " / ".join(titles) if titles else _text(_maybe(raw, TITLE_KEYS))
+
+        mall = raw.get("mall") if isinstance(raw.get("mall"), dict) else {}
+        shop = str(mall.get("mallName") or "").strip() or _text(_maybe(raw, SHOP_KEYS))
+
+        prompt = str(raw.get("orderStatusPrompt") or raw.get("statusDesc") or "").strip()
+        status, status_text = map_status(prompt)
+        if status == "unknown":
+            generic_status = _maybe(raw, STATUS_KEYS)
+            if isinstance(generic_status, str) and generic_status.strip():
+                status, status_text = map_status(generic_status)
+            if status == "unknown":
+                try:
+                    code = int(raw.get("status") or 0)
+                except (TypeError, ValueError):
+                    code = 0
+                status, status_text = PDD_STATUS.get(code, ("unknown", prompt))
+
+        amount = None
+        for key in ("orderAmount", "displayAmount", "payAmount", "actualFee"):
+            if raw.get(key) is not None:
+                amount = _amount(raw[key], "pdd", key)
+                if amount is not None:
+                    break
+        if amount is None:
+            amount = _amount(_maybe(raw, AMOUNT_KEYS), "pdd")
+
+        link = str(raw.get("orderLinkUrl") or "").strip()
+        if not link:
+            link = _text(_maybe(raw, URL_KEYS))
+        if link and not link.startswith("http"):
+            link = "https://mobile.yangkeduo.com/" + link.lstrip("/")
+
+        image = str((goods[0].get("thumbUrl") if goods else "") or "").strip()
+        if not image:
+            image = _text(_maybe(raw, IMAGE_KEYS))
+
+        tracking = str(raw.get("trackingNumber") or "").strip() or _text(
+            _maybe(raw, TRACKING_KEYS)
+        )
+
+        orders.append(
+            {
+                "platform": "pdd",
+                "platform_order_id": order_id,
+                "title": title[:300],
+                "shop": shop[:120],
+                "amount": amount,
+                "status": status,
+                "status_text": status_text[:40],
+                "order_time": _time(raw.get("orderTime") or _maybe(raw, TIME_KEYS)),
+                "tracking_no": tracking or None,
+                "url": link or None,
+                "product_url": None,
+                "image_url": image or None,
+                "source": "agent",
+                "raw": {"_source": "web", "_platform": "pdd", "order": raw},
+            }
+        )
+    return orders
 
 
 def _dedupe(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -330,6 +492,135 @@ def _dedupe(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if current.get("status") in (None, "", "unknown") and order.get("status") not in (None, "", "unknown"):
             current["status"] = order["status"]
     return list(merged.values())
+
+
+def parse_html_orders(html: str, platform: str) -> list[dict[str, Any]]:
+    """Extract orders from platform-rendered HTML (no JSON available)."""
+    platform = platforms.normalize(platform)
+    if platform == "pdd":
+        found: list[dict[str, Any]] = []
+        for payload in extract_embedded_payloads(html, platform):
+            found.extend(extract_orders(payload, platform))
+        return _dedupe(found)
+    if platform == "xianyu":
+        return parse_xianyu_html(html)
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Xianyu server-rendered order list
+# ---------------------------------------------------------------------------
+XIANYU_STATUS_WORDS = (
+    "交易成功",
+    "交易关闭",
+    "等待",
+    "待付款",
+    "待发货",
+    "待收货",
+    "退款",
+    "已发货",
+    "已完成",
+)
+
+
+def _has_class_prefix(node: Node, prefix: str) -> bool:
+    return any(
+        cls == prefix or cls.startswith(prefix + "-") or cls.startswith(prefix + "--")
+        for cls in node.classes
+    )
+
+
+def _find_prefix(node: Node, prefix: str) -> Node | None:
+    for child in node.iter():
+        if child is node:
+            continue
+        if _has_class_prefix(child, prefix):
+            return child
+    return None
+
+
+def parse_xianyu_html(html: str) -> list[dict[str, Any]]:
+    """Parse ``goofish.com/bought`` cards.
+
+    Each card is server-rendered: a seller, a status, a product link carrying
+    ``orderId``, a thumbnail and a price. The list has no "订单号" text, so the
+    generic text fallback cannot see it.
+    """
+    doc = parse_html(html or "")
+    orders: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for anchor in doc.find_all("a"):
+        href = str(anchor.attrs.get("href") or "").strip()
+        match = re.search(r"order-detail\?orderId=(\d+)", href)
+        if not match:
+            continue
+        order_id = match.group(1)
+        if order_id in seen:
+            continue
+        seen.add(order_id)
+
+        card: Node = anchor
+        for _ in range(7):
+            if card.parent is None:
+                break
+            card = card.parent
+            text = card.text()
+            if "¥" in text and any(word in text for word in XIANYU_STATUS_WORDS):
+                break
+
+        title_node = _find_prefix(anchor, "name")
+        title = title_node.text().strip() if title_node else anchor.text().strip()
+
+        seller = ""
+        for node in card.iter():
+            if node is card:
+                continue
+            if _has_class_prefix(node, "name"):
+                value = node.text().strip()
+                if value and value != title:
+                    seller = value
+                    break
+
+        price_node = _find_prefix(card, "price")
+        amount = _amount(price_node.text(), "xianyu", "price") if price_node else None
+
+        status_node = _find_prefix(card, "status")
+        status_text = status_node.text().strip() if status_node else ""
+        status, status_text = map_status(status_text)
+
+        image = ""
+        picture = _find_prefix(card, "picture")
+        if picture is not None:
+            for img in picture.find_all("img"):
+                value = str(img.attrs.get("src") or "").strip()
+                if value:
+                    image = "https:" + value if value.startswith("//") else value
+                    break
+
+        orders.append(
+            {
+                "platform": "xianyu",
+                "platform_order_id": order_id,
+                "title": title[:300],
+                "shop": seller[:120],
+                "amount": amount,
+                "status": status,
+                "status_text": status_text[:40],
+                "order_time": None,
+                "tracking_no": None,
+                "url": href,
+                "product_url": None,
+                "image_url": image or None,
+                "source": "agent",
+                "raw": {
+                    "_source": "web",
+                    "_platform": "xianyu",
+                    "text": card.text()[:1500],
+                },
+            }
+        )
+    return orders
 
 
 # ---------------------------------------------------------------------------

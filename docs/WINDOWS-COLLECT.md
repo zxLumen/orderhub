@@ -27,7 +27,7 @@
 
 - 淘宝：https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm
 - 拼多多：https://mobile.yangkeduo.com/orders.html
-- 闲鱼：https://www.goofish.com/personal?tab=order
+- 闲鱼：https://www.goofish.com/bought
 
 要求：登录后能直接看到「全部订单 / 订单号」列表，不要停在登录页或验证码页。
 
