@@ -80,6 +80,9 @@
           <input type="file" id="importFile" accept=".csv,.zip,.xlsx,.json,.txt" hidden>
           <div class="button-row">
             <button class="btn primary" id="importBtn">选择文件导入</button>
+            <select id="importPlatform" class="inline-select" aria-label="未知平台默认归到">
+              <option value="">未知归到：自动</option>
+            </select>
             <button class="btn ghost" id="importHelpBtn">怎么导出</button>
           </div>
           <div id="importResult" class="import-result hidden"></div>

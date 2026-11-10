@@ -13,6 +13,7 @@ def parse_upload(
     *,
     platform: str = "",
     include_unknown: bool = False,
+    default_platform: str = "",
 ) -> dict[str, Any]:
     tables, error = files.load_tables(data, filename)
     if error:
@@ -33,13 +34,20 @@ def parse_upload(
         kind = bill.detect(table.headers)
         if kind:
             parsed, table_stats = bill.to_orders(
-                table, kind=kind, include_unknown=include_unknown
+                table,
+                kind=kind,
+                include_unknown=include_unknown,
+                default_platform=default_platform,
             )
             sources.append(kind)
             source = kind
         else:
             parsed, table_stats = generic.to_orders(
-                table, platform=platform, filename=filename, source="export"
+                table,
+                platform=platform,
+                filename=filename,
+                source="export",
+                default_platform=default_platform,
             )
             sources.append("export")
             source = "export"

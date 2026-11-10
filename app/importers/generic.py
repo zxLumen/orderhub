@@ -92,6 +92,7 @@ def to_orders(
     platform: str = "",
     filename: str = "",
     source: str = "export",
+    default_platform: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     orders: list[dict[str, Any]] = []
     stats = {"rows": 0, "skipped_invalid": 0}
@@ -112,7 +113,7 @@ def to_orders(
             guessed = platforms.infer(row_platform) if platforms.normalize(row_platform) == "other" else platforms.normalize(row_platform)
         else:
             guessed = platforms.infer(text, default="")
-        chosen = guessed or filename_platform or "other"
+        chosen = guessed or filename_platform or default_platform or "other"
 
         order_id = _clean_id(_pick(row, "order_id"))
         title = _pick(row, "title")

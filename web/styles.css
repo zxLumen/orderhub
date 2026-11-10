@@ -413,6 +413,16 @@ textarea#smsBulkInput:focus { border-color: var(--brand); }
 .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .btn.ghost { background: transparent; color: var(--muted); }
 .btn:disabled { opacity: 0.5; }
+.inline-select {
+  height: 36px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  color: var(--text-2);
+  padding: 0 10px;
+  font-size: 12.5px;
+  max-width: 190px;
+}
 
 .field { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .field span { font-size: 12px; color: var(--muted); }

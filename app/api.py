@@ -551,6 +551,11 @@ class Handler(BaseHTTPRequestHandler):
                 filename,
                 platform=str(payload.get("platform") or ""),
                 include_unknown=bool(payload.get("include_unknown")),
+                default_platform=(
+                    platforms.normalize(str(payload.get("default_platform") or ""))
+                    if payload.get("default_platform")
+                    else ""
+                ),
             )
             if not parsed.get("ok"):
                 raise ApiError(HTTPStatus.BAD_REQUEST, str(parsed.get("error") or "导入失败"))

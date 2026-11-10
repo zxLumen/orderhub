@@ -138,6 +138,15 @@ class ImporterTest(unittest.TestCase):
         self.assertFalse(parsed["ok"])
         self.assertIn("表头", parsed["error"])
 
+    def test_default_platform_for_unknown_merchants(self):
+        parsed = parse_upload(
+            ALIPAY_CSV.encode("gbk"), "alipay.csv", default_platform="taobao"
+        )
+        self.assertTrue(parsed["ok"])
+        self.assertNotIn("other", {item["platform"] for item in parsed["orders"]})
+        fallback = next(item for item in parsed["orders"] if "矿泉水" in item["title"])
+        self.assertEqual(fallback["platform"], "taobao")
+
 
 class ImportServiceTest(unittest.TestCase):
     def setUp(self):

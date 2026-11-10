@@ -127,7 +127,13 @@ def _wechat_platform(row: dict[str, str]) -> str:
     return platforms.infer(text)
 
 
-def to_orders(table: Table, *, kind: str, include_unknown: bool = False) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def to_orders(
+    table: Table,
+    *,
+    kind: str,
+    include_unknown: bool = False,
+    default_platform: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     orders: list[dict[str, Any]] = []
     stats = {"rows": 0, "skipped_income": 0, "skipped_type": 0, "skipped_unknown": 0, "skipped_invalid": 0}
 
@@ -144,6 +150,8 @@ def to_orders(table: Table, *, kind: str, include_unknown: bool = False) -> tupl
             continue
 
         platform = _alipay_platform(row) if kind == "alipay" else _wechat_platform(row)
+        if platform == "other" and default_platform:
+            platform = default_platform
         category = _get(row, "交易分类")
         if platform == "other" and not include_unknown:
             if not any(word in category for word in SHOPPING_CATEGORIES):

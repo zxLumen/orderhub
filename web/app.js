@@ -308,6 +308,13 @@
           <div class="channels">${(item.channels || []).map((channel) => `<span class="channel ${item.orders > 0 ? "on" : ""}">${esc(channelNames[channel] || channel)}</span>`).join("")}</div>
         </div>
       </div>`).join("") || empty("平台状态加载中", "");
+    const select = $("#importPlatform");
+    if (select && select.options.length <= 1) {
+      select.innerHTML += items
+        .filter((item) => item.id !== "other")
+        .map((item) => `<option value="${esc(item.id)}">未知归到：${esc(item.label)}</option>`)
+        .join("");
+    }
     $$(".platform-row", list).forEach((node) => {
       node.addEventListener("click", () => {
         state.recentPlatform = node.dataset.platform || "";
@@ -885,7 +892,11 @@
       const data = bufferToBase64(await file.arrayBuffer());
       const result = await api("/api/import/file", {
         method: "POST",
-        body: JSON.stringify({ filename: file.name, data }),
+        body: JSON.stringify({
+          filename: file.name,
+          data,
+          default_platform: $("#importPlatform")?.value || "",
+        }),
       });
       const byPlatform = Object.entries(result.by_platform || {})
         .map(([key, count]) => `${platformLabel(key)} ${count}`)

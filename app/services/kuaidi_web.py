@@ -87,9 +87,10 @@ CODE_BY_TYPE = {value: key for key, value in TYPE_MAP.items()}
 
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL = 600
+_RETRY_TTL = 90
 _LOCK = threading.Lock()
 _LAST_CALL = 0.0
-_MIN_INTERVAL = 0.55
+_MIN_INTERVAL = 2.0
 
 
 def _sleep() -> None:
@@ -173,7 +174,7 @@ def _query_once(tracking_no: str, kuaidi_type: str) -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8", "replace"))
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        result = {"ok": False, "error": str(exc), "type": kuaidi_type}
+        result = {"ok": False, "error": str(exc), "type": kuaidi_type, "retryable": True}
         _CACHE[key] = (time.monotonic(), result)
         return result
 
@@ -184,15 +185,23 @@ def _query_once(tracking_no: str, kuaidi_type: str) -> dict[str, Any]:
             "ok": False,
             "error": message or "empty",
             "type": kuaidi_type,
-            "not_found": True,
+            "retryable": True,
         }
         _CACHE[key] = (time.monotonic(), result)
         return result
 
     first_context = str((events[0] or {}).get("context") or "")
     if "查无结果" in first_context or "暂无轨迹" in first_context:
-        result = {"ok": False, "error": "查无结果", "type": kuaidi_type, "not_found": True}
-        _CACHE[key] = (time.monotonic(), result)
+        # kuaidi100 answers with this canned record when it rate-limits an IP,
+        # not only when the waybill is unknown. Cache it briefly so a later
+        # poll/manual query can retry instead of being stuck for 10 minutes.
+        result = {
+            "ok": False,
+            "error": "查无结果",
+            "type": kuaidi_type,
+            "retryable": True,
+        }
+        _CACHE[key] = (time.monotonic() - (_CACHE_TTL - _RETRY_TTL), result)
         return result
 
     state = str(payload.get("state") or "")

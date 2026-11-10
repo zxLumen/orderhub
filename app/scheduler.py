@@ -11,7 +11,6 @@ from datetime import datetime
 from . import config
 from .collectors.jd import collect_jd
 from .db import session
-from .services import kuaidi100
 from .services.ingest import poll_parcels
 
 log = logging.getLogger(__name__)
@@ -41,10 +40,9 @@ class Scheduler:
             now = time.time()
             if now >= self._next_parcel:
                 self._next_parcel = now + max(300, config.PARCEL_POLL_SECONDS)
-                if kuaidi100.configured():
-                    threading.Thread(target=self._run_parcel, daemon=True).start()
-                else:
-                    log.debug("Kuaidi100 not configured; parcel polling skipped")
+                # Paid API when configured; otherwise the free web lookup is
+                # always available (no key required).
+                threading.Thread(target=self._run_parcel, daemon=True).start()
             if config.ENABLE_JD_COLLECTOR and now >= self._next_jd:
                 interval = max(1800, config.JD_INTERVAL_SECONDS)
                 last = self._last_jd_run_at()
