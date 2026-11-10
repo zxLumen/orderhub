@@ -53,7 +53,14 @@
 
 ## 抖音 / 转转
 
-抖音没有可用的网页订单页：`douyin.com/user/self` 登录后也没有订单入口，`/shop` 是 404，`haohuo.jinritemai.com` 的 H5 订单页需要 App 内 token，桌面 Chrome 打开只会报「网络异常」。抖音订单请用 App 导出个人信息副本后在这里导入。
+抖音不再走网页 / OCR。App 的订单列表背后是电商 JSON 接口 `ec.snssdk.com/order/page`，只需要登录 Cookie + App 参数，不需要 OCR、Frida 或逐个点订单。agent 会从已 root 的 MuMu 模拟器里读取 WebView 的 Cookie（`app_webview/Default/Cookies`，明文），调用接口拉全部订单，并按 6 小时自动跑一次。模拟器只要保持登录即可；Cookie 失效时 agent 会自动重新读取。
+
+手动验证：
+
+```powershell
+cd E:\Project\orderhub
+.\.venv\Scripts\python.exe -m app.collectors.douyin
+```
 
 转转同样没有稳定的公开订单页，没有可用 URL 时走导入。如果你确实找到了可用的订单页地址，可以覆盖：
 

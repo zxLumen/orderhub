@@ -116,33 +116,40 @@ def refresh_cookies_from_emulator() -> dict[str, str]:
         raise DouyinAuthError("adb_not_found")
     remote_dir = "/data/local/tmp"
     remote = f"{remote_dir}/orderhub-cookies.db"
-    with tempfile.TemporaryDirectory() as tmp:
-        tmpdir = Path(tmp)
-        for suffix in ("", "-wal", "-journal"):
-            _run(
-                [
-                    adb,
-                    "-s",
-                    ADB_SERIAL,
-                    "shell",
-                    f"cp {COOKIE_DB}{suffix} {remote}{suffix} 2>/dev/null || true",
-                ],
-                timeout=30,
-            )
-            _run(
-                [adb, "-s", ADB_SERIAL, "pull", f"{remote}{suffix}", str(tmpdir / f"Cookies{suffix}")],
-                timeout=60,
-            )
-        db_path = tmpdir / "Cookies"
-        if not db_path.exists() or db_path.stat().st_size == 0:
-            raise DouyinAuthError("douyin_cookie_db_missing")
-        con = sqlite3.connect(db_path)
-        try:
-            rows = con.execute(
-                "select host_key, name, value from cookies where length(value) > 0"
-            ).fetchall()
-        finally:
-            con.close()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            for suffix in ("", "-wal", "-journal"):
+                _run(
+                    [
+                        adb,
+                        "-s",
+                        ADB_SERIAL,
+                        "shell",
+                        f"cp {COOKIE_DB}{suffix} {remote}{suffix} 2>/dev/null || true",
+                    ],
+                    timeout=30,
+                )
+                _run(
+                    [adb, "-s", ADB_SERIAL, "pull", f"{remote}{suffix}", str(tmpdir / f"Cookies{suffix}")],
+                    timeout=60,
+                )
+            db_path = tmpdir / "Cookies"
+            if not db_path.exists() or db_path.stat().st_size == 0:
+                raise DouyinAuthError("douyin_cookie_db_missing")
+            con = sqlite3.connect(db_path)
+            try:
+                rows = con.execute(
+                    "select host_key, name, value from cookies where length(value) > 0"
+                ).fetchall()
+            finally:
+                con.close()
+    finally:
+        # The copy carries live session cookies; never leave it on /data/local/tmp.
+        _run(
+            [adb, "-s", ADB_SERIAL, "shell", f"rm -f {remote} {remote}-wal {remote}-journal"],
+            timeout=20,
+        )
 
     # Values are shared across the ByteDance cookie domains; prefer the host
     # that the e-commerce API actually reads.
