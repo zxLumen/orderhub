@@ -961,12 +961,18 @@
     const node = $("#smsBulkInput");
     const texts = node.value.split("\n").map((line) => line.trim()).filter(Boolean);
     if (!texts.length) { toast("先粘贴短信"); return; }
+    let received = 0;
+    let created = 0;
     try {
-      const result = await api("/api/sms/bulk", {
-        method: "POST",
-        body: JSON.stringify({ texts }),
-      });
-      toast(`收到 ${result.received} 条，新增 ${result.created} 条`);
+      for (let i = 0; i < texts.length; i += 100) {
+        const result = await api("/api/sms/bulk", {
+          method: "POST",
+          body: JSON.stringify({ texts: texts.slice(i, i + 100) }),
+        });
+        received += result.received || 0;
+        created += result.created || 0;
+      }
+      toast(`收到 ${received} 条，新增 ${created} 条`);
       node.value = "";
       await loadDashboard({ silent: true });
     } catch (error) { toast(error.message); }
