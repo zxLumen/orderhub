@@ -220,13 +220,24 @@ def _prepare_mobile(page: Any) -> None:
 
 def _scroll(page: Any, sink: JsonSink, *, max_scrolls: int, max_pages: int) -> int:
     pages = 0
+    idle = 0
     for _ in range(max_scrolls):
+        before = len(sink.orders)
         try:
-            page.mouse.wheel(0, 1800)
+            page.mouse.wheel(0, 4000)
         except Exception:
             break
-        page.wait_for_timeout(900)
+        page.wait_for_timeout(1100)
         sink.drain()
+        if sink.orders:
+            if len(sink.orders) > before:
+                idle = 0
+            else:
+                idle += 1
+                # Lazy lists (PDD, Xianyu) keep loading until the account runs
+                # out of orders; stop once five scrolls add nothing new.
+                if idle >= 5:
+                    break
     for _ in range(max_pages):
         clicked = False
         for label in ("加载更多", "查看更多", "下一页"):

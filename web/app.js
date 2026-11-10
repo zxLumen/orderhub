@@ -32,6 +32,7 @@
     stats: null,
     platforms: [],
     orders: [],
+    orderLimit: 50,
     shipments: [],
     sms: [],
     captures: [],
@@ -172,7 +173,7 @@
     try {
       const [stats, orders, parcels, sms, captures, alerts, collector, platforms] = await Promise.all([
         api("/api/stats"),
-        api("/api/orders?limit=50" + (state.recentPlatform ? `&platform=${encodeURIComponent(state.recentPlatform)}` : "")),
+        api(`/api/orders?limit=${state.orderLimit}` + (state.recentPlatform ? `&platform=${encodeURIComponent(state.recentPlatform)}` : "")),
         api("/api/shipments?limit=100"),
         api("/api/sms?limit=30"),
         api("/api/captures?limit=20"),
@@ -271,15 +272,29 @@
 
   async function selectRecentPlatform(platform) {
     state.recentPlatform = platform || "";
+    state.orderLimit = 50;
     try {
       const suffix = state.recentPlatform ? `&platform=${encodeURIComponent(state.recentPlatform)}` : "";
-      const data = await api(`/api/orders?limit=50${suffix}`);
+      const data = await api(`/api/orders?limit=${state.orderLimit}${suffix}`);
       state.orders = data.items || [];
     } catch (error) {
       toast(error.message);
     }
     renderPlatformFilters();
     renderRecent();
+  }
+
+  async function loadMoreOrders() {
+    state.orderLimit += 100;
+    const suffix = state.recentPlatform ? `&platform=${encodeURIComponent(state.recentPlatform)}` : "";
+    try {
+      const data = await api(`/api/orders?limit=${state.orderLimit}${suffix}`);
+      state.orders = data.items || [];
+      renderRecent();
+    } catch (error) {
+      state.orderLimit -= 100;
+      toast(error.message);
+    }
   }
 
   function renderPlatformFilters() {
@@ -370,9 +385,21 @@
       });
     });
     const current = (state.platforms || []).find((item) => item.id === state.recentPlatform);
-    $("#recentHint").textContent = state.recentPlatform
-      ? `${current ? current.orders || 0 : orders.length} 单`
-      : `共 ${state.stats?.orders || orders.length} 单`;
+    const total = state.recentPlatform
+      ? (current ? current.orders || 0 : orders.length)
+      : (state.stats?.orders || orders.length);
+    $("#recentHint").textContent = state.recentPlatform ? `${total} 单` : `共 ${total} 单`;
+    if (orders.length < total) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.textContent = `加载更多（已显示 ${orders.length} / ${total}）`;
+      more.style.cssText = "width:100%;padding:12px;margin:8px 0;border:1px dashed #d0d0d0;background:#fff;color:#666;border-radius:12px;font-size:14px;cursor:pointer;";
+      more.addEventListener("click", async () => {
+        more.disabled = true;
+        await loadMoreOrders();
+      });
+      list.appendChild(more);
+    }
   }
 
   function renderActivity() {

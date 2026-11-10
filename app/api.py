@@ -112,7 +112,9 @@ class Handler(BaseHTTPRequestHandler):
             "Content-Security-Policy",
             "default-src 'self'; img-src 'self' data: blob: https://*.360buyimg.com "
             "https://*.alicdn.com https://*.taobao.com https://*.pinduoduo.com "
-            "https://*.yangkeduo.com https://*.douyinpic.com https://*.byteimg.com "
+            "https://*.yangkeduo.com https://*.pddpic.com "
+            "https://*.douyinpic.com https://*.byteimg.com https://*.ecombdimg.com "
+            "https://*.ecombdstatic.com https://*.douyinstatic.com "
             "https://*.zhuanzhuan.com https://*.goofish.com https://*.xiaohongshu.com; "
             "style-src 'self' 'unsafe-inline'; script-src 'self'; "
             "connect-src 'self'; manifest-src 'self'; worker-src 'self'",
