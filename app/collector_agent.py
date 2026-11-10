@@ -168,26 +168,29 @@ class Agent:
                 return True
         return False
 
-    def _switch_chrome(self, mode: str) -> bool:
+    def _switch_chrome(self, mode: str, url: str = "") -> bool:
         script = Path(config.BASE_DIR) / "scripts" / "chrome_ctl.ps1"
         if not script.exists():
             log.error("chrome_ctl.ps1 not found: %s", script)
             return False
         log.info("switching chrome to %s", mode)
+        command = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            str(script),
+            "-Mode",
+            mode,
+        ]
+        if url:
+            command += ["-Url", url]
         try:
             subprocess.Popen(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-WindowStyle",
-                    "Hidden",
-                    "-File",
-                    str(script),
-                    "-Mode",
-                    mode,
-                ],
+                command,
                 cwd=str(config.BASE_DIR),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -217,7 +220,7 @@ class Agent:
     def _ensure_headless(self) -> None:
         if self._chrome_mode() != "visible":
             return
-        log.info("JD login restored; switching back to headless")
+        log.info("switching chrome back to headless")
         self._switch_chrome("headless")
 
     def _page_open(self, url: str) -> bool:
@@ -250,6 +253,8 @@ class Agent:
             return
         self.state["pending_platform"] = platform
         self.state["pending_state"] = state
+        # Do not retry immediately: give the user time to log in.
+        self.state["last_web_retry"] = time.time()
         self._save_state()
         if not config.WEB_AUTO_LOGIN or not self._chrome_ok():
             return
@@ -257,10 +262,11 @@ class Agent:
         if self._page_open(target):
             return
         if self._chrome_mode() != "visible":
-            if not self._switch_chrome("visible"):
+            if not self._switch_chrome("visible", target):
                 return
         log.info("%s needs login; opened %s", platform, target)
-        self._open_platform_tab(target)
+        if not self._page_open(target):
+            self._open_platform_tab(target)
 
     def _web_login_watch(self) -> None:
         """Retry the pending web platform every 5 minutes until it works."""
@@ -288,7 +294,7 @@ class Agent:
         if not config.JD_AUTO_LOGIN or not self._chrome_ok():
             return
         if self._chrome_mode() == "visible":
-            if self._order_page_open(self._chrome_pages()):
+            if self.state.get("login_required") and self._order_page_open(self._chrome_pages()):
                 log.info("JD login detected in the visible window")
                 self.state["login_required"] = False
                 self._save_state()
@@ -443,6 +449,7 @@ class Agent:
             self.state.pop("pending_platform", None)
             self.state.pop("pending_state", None)
             self._save_state()
+            self._ensure_headless()
 
         status = "ok" if result.get("ok") else str(result.get("error") or "error")
         message = json.dumps(result, ensure_ascii=False)[:500]
