@@ -48,11 +48,11 @@ PLATFORMS: dict[str, dict[str, Any]] = {
     },
     "douyin": {
         "label": "抖音",
-        "order_url": "https://www.douyin.com/user/self",
-        "login_url": "https://www.douyin.com/user/self",
-        "agent_status": "experimental",
-        "channels": ["export", "sms", "bill", "manual"],
-        "import_hint": "抖音网页版没有消费者订单页（已实测），请用 App → 我 → 抖音商城 → 订单 → 客服/设置 → 个人信息副本，导出后在这里导入。",
+        "order_url": "https://haohuo.jinritemai.com/views/neworder/center",
+        "login_url": "https://haohuo.jinritemai.com/views/neworder/center",
+        "agent_status": "ready",
+        "channels": ["agent", "export", "sms", "bill", "manual"],
+        "import_hint": "Windows 采集 agent 已支持抖音：自动从模拟器 WebView 读取登录态并调用订单接口（无需 OCR、无需逐个点订单）。",
         "keywords": ("抖音", "抖店", "抖音商城", "字节", "微播视界", "火山引擎", "抖音电商"),
     },
     "xianyu": {

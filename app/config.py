@@ -89,6 +89,9 @@ JD_ORDER_URL = os.environ.get(
 JD_INTERVAL_SECONDS = int(os.environ.get("JD_INTERVAL_SECONDS", "21600"))
 JD_AUTO_LOGIN = _bool("JD_AUTO_LOGIN", False)
 JD_MAX_PAGES = max(1, int(os.environ.get("JD_MAX_PAGES", "50")))
+# Douyin is pulled through the e-commerce JSON API instead of the browser.
+# Keep the interval conservative: each run fetches every order page.
+DOUYIN_INTERVAL_SECONDS = max(1800, int(os.environ.get("ORDERHUB_DOUYIN_INTERVAL", "21600")))
 JD_MAX_SCROLLS = max(1, int(os.environ.get("JD_MAX_SCROLLS", "8")))
 JD_DETAIL_MAX = max(0, int(os.environ.get("JD_DETAIL_MAX", "10")))
 PARCEL_POLL_SECONDS = int(os.environ.get("PARCEL_POLL_SECONDS", "1800"))

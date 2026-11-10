@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, db
+from .collectors.douyin import collect_douyin
 from .collectors.jd import collect_jd, normalize_mode
 from .collectors.web import SUPPORTED as WEB_PLATFORMS
 from .collectors.web import collect_web, login_url, order_url
@@ -52,6 +53,7 @@ class Agent:
         self._last_heartbeat = 0.0
         self._last_sync = 0.0
         self._last_schedule = 0.0
+        self._last_douyin_schedule = 0.0
         self.state = self._load_state()
 
     # ------------------------------------------------------------------
@@ -109,6 +111,7 @@ class Agent:
                 "last_alert_id": 0,
                 "last_event_id": 0,
                 "last_schedule": 0,
+                "last_douyin_schedule": 0,
             }
 
     def _save_state(self) -> None:
@@ -436,6 +439,12 @@ class Agent:
         log.info("starting %s collection mode=%s command=%s", platform, mode, command_id)
         if platform == "jd":
             result = collect_jd(mode)
+        elif platform == "douyin":
+            # Douyin's order list is only reachable through the App, but the
+            # App itself talks to a plain JSON API. The collector pulls the
+            # session cookies from the emulator WebView and calls that API, so
+            # it must run before the generic web (Chrome) branch.
+            result = collect_douyin(mode)
         elif platform in WEB_PLATFORMS:
             result = collect_web(platform, mode)
         else:
@@ -483,12 +492,24 @@ class Agent:
         now = time.time()
         interval = max(1800, config.JD_INTERVAL_SECONDS)
         last = max(float(self.state.get("last_schedule") or 0), self._last_schedule)
-        if now - last < interval:
-            return
-        self._last_schedule = now
-        self.state["last_schedule"] = now
-        self._save_state()
-        self.collect("recent")
+        if now - last >= interval:
+            self._last_schedule = now
+            self.state["last_schedule"] = now
+            self._save_state()
+            self.collect("recent")
+
+        # Douyin goes through its own JSON API, so it has a separate (and much
+        # cheaper) schedule. This is what makes the pull fully automatic.
+        douyin_last = max(
+            float(self.state.get("last_douyin_schedule") or 0),
+            self._last_douyin_schedule,
+        )
+        if now - douyin_last >= config.DOUYIN_INTERVAL_SECONDS:
+            self._last_douyin_schedule = now
+            self.state["last_douyin_schedule"] = now
+            self._save_state()
+            log.info("scheduled Douyin collection")
+            self.collect("recent", platform="douyin")
 
     def poll_command(self) -> bool:
         try:
