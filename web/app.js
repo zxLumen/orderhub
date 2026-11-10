@@ -285,14 +285,18 @@
   }
 
   async function loadMoreOrders() {
-    state.orderLimit += 100;
     const suffix = state.recentPlatform ? `&platform=${encodeURIComponent(state.recentPlatform)}` : "";
+    const offset = state.orders.length;
     try {
-      const data = await api(`/api/orders?limit=${state.orderLimit}${suffix}`);
-      state.orders = data.items || [];
+      const data = await api(`/api/orders?limit=100&offset=${offset}${suffix}`);
+      const items = data.items || [];
+      if (!items.length) {
+        toast("没有更多订单了");
+        return;
+      }
+      state.orders = state.orders.concat(items);
       renderRecent();
     } catch (error) {
-      state.orderLimit -= 100;
       toast(error.message);
     }
   }
@@ -398,6 +402,7 @@
         more.disabled = true;
         await loadMoreOrders();
       });
+
       list.appendChild(more);
     }
   }
