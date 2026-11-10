@@ -253,7 +253,7 @@ class Agent:
         self._save_state()
         if not config.WEB_AUTO_LOGIN or not self._chrome_ok():
             return
-        target = login_url(platform) or order_url(platform)
+        target = order_url(platform) if state == "captcha" else (login_url(platform) or order_url(platform))
         if self._page_open(target):
             return
         if self._chrome_mode() != "visible":
