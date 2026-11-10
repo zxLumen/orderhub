@@ -6,8 +6,9 @@
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
   const PLATFORM_LABELS = {
-    jd: "京东", taobao: "淘宝", douyin: "抖音", meituan: "美团",
-    pdd: "拼多多", vip: "唯品会", eleme: "饿了么", other: "其他", unknown: "其他",
+    jd: "京东", taobao: "淘宝/天猫", douyin: "抖音", meituan: "美团",
+    pdd: "拼多多", xianyu: "闲鱼", zhuanzhuan: "转转", xiaohongshu: "小红书",
+    vip: "唯品会", eleme: "饿了么", other: "其他", unknown: "其他",
   };
   const STATUS_LABELS = {
     unknown: "未知", pending_payment: "待付款", processing: "待发货",
@@ -29,6 +30,7 @@
     tab: "recent",
     config: null,
     stats: null,
+    platforms: [],
     orders: [],
     shipments: [],
     sms: [],
@@ -38,6 +40,7 @@
     searchResults: [],
     searchQuery: "",
     platform: "",
+    recentPlatform: "",
     parcelActive: true,
     loading: false,
   };
@@ -167,17 +170,19 @@
     const refreshBtn = $("#refreshBtn");
     if (!silent) refreshBtn.classList.add("spinning");
     try {
-      const [stats, orders, parcels, sms, captures, alerts, collector] = await Promise.all([
+      const [stats, orders, parcels, sms, captures, alerts, collector, platforms] = await Promise.all([
         api("/api/stats"),
-        api("/api/orders?limit=30"),
+        api("/api/orders?limit=50"),
         api("/api/shipments?limit=100"),
         api("/api/sms?limit=30"),
         api("/api/captures?limit=20"),
         api("/api/alerts?limit=20"),
         api("/api/collector/status").catch(() => null),
+        api("/api/platforms").catch(() => ({ items: [] })),
       ]);
       state.stats = stats;
       state.config = { ...(state.config || {}), ...stats };
+      state.platforms = platforms.items || [];
       state.orders = orders.items || [];
       state.shipments = parcels.items || [];
       state.sms = sms.items || [];
@@ -195,6 +200,8 @@
 
   function renderAll() {
     renderSummary();
+    renderPlatformFilters();
+    renderPlatforms();
     renderRecent();
     renderActivity();
     renderParcels();
@@ -249,20 +256,87 @@
       </button>`;
   }
 
+  function platformLabel(key) {
+    const found = (state.platforms || []).find((item) => item.id === key);
+    return found?.label || PLATFORM_LABELS[key] || key || "其他";
+  }
+
+  function platformsWithOrders() {
+    return (state.platforms || []).filter((item) => item.orders > 0);
+  }
+
+  function chipHtml(item, active) {
+    return `<button class="chip${active ? " active" : ""}" data-platform="${esc(item.id)}">${esc(item.label)} <span class="chip-count">${item.orders}</span></button>`;
+  }
+
+  function renderPlatformFilters() {
+    const items = platformsWithOrders();
+    const search = $("#platformFilters");
+    if (search) {
+      search.innerHTML = `<button class="chip${state.platform ? "" : " active"}" data-platform="">全部</button>`
+        + items.map((item) => chipHtml(item, state.platform === item.id)).join("");
+      $$(".chip", search).forEach((node) => node.addEventListener("click", () => {
+        state.platform = node.dataset.platform || "";
+        $$(".chip", search).forEach((chip) => chip.classList.toggle("active", chip === node));
+        runSearch();
+      }));
+    }
+    const recent = $("#recentPlatforms");
+    if (recent) {
+      recent.innerHTML = `<button class="chip${state.recentPlatform ? "" : " active"}" data-platform="">全部</button>`
+        + items.map((item) => chipHtml(item, state.recentPlatform === item.id)).join("");
+      $$(".chip", recent).forEach((node) => node.addEventListener("click", () => {
+        state.recentPlatform = node.dataset.platform || "";
+        renderPlatformFilters();
+        renderRecent();
+      }));
+    }
+  }
+
+  function renderPlatforms() {
+    const list = $("#platformList");
+    if (!list) return;
+    const items = state.platforms || [];
+    const total = items.reduce((sum, item) => sum + (item.orders || 0), 0);
+    $("#platformCount").textContent = items.length ? `${total} 单 · ${items.filter((item) => item.orders > 0).length}/${items.length} 个平台有数据` : "";
+    const channelNames = { agent: "采集", export: "导出", sms: "短信", bill: "账单", manual: "手动" };
+    list.innerHTML = items.map((item) => `
+      <div class="platform-row" data-platform="${esc(item.id)}" role="button" tabindex="0">
+        <span class="badge ${esc(item.id)}">${esc(item.label)}</span>
+        <div class="platform-meta">
+          <div class="nums"><strong>${item.orders || 0}</strong> 单 · ${item.shipments || 0} 包裹${item.last_order_at ? ` · ${esc(timeText(item.last_order_at))}` : ""}</div>
+          <div class="channels">${(item.channels || []).map((channel) => `<span class="channel ${item.orders > 0 ? "on" : ""}">${esc(channelNames[channel] || channel)}</span>`).join("")}</div>
+        </div>
+      </div>`).join("") || empty("平台状态加载中", "");
+    $$(".platform-row", list).forEach((node) => {
+      node.addEventListener("click", () => {
+        state.recentPlatform = node.dataset.platform || "";
+        switchTab("recent");
+        renderPlatformFilters();
+        renderRecent();
+      });
+    });
+  }
+
   function renderRecent() {
     const list = $("#recentList");
-    if (!state.orders.length) {
-      list.innerHTML = empty("还没有订单", "短信和京东采集会慢慢把订单补进来。");
+    const orders = state.orders
+      .filter((order) => !state.recentPlatform || order.platform === state.recentPlatform)
+      .sort((a, b) =>
+        String(b.order_time || b.created_at || "").localeCompare(String(a.order_time || a.created_at || ""))
+      );
+    if (!orders.length) {
+      list.innerHTML = empty(
+        state.recentPlatform ? `没有${platformLabel(state.recentPlatform)}订单` : "还没有订单",
+        state.recentPlatform ? "换一个平台，或去「更多 → 导入订单」补历史。" : "短信、账单导入和京东采集会慢慢把订单补进来。"
+      );
       $("#recentHint").textContent = "";
       return;
     }
-    const orders = [...state.orders].sort((a, b) =>
-      String(b.order_time || b.created_at || "").localeCompare(String(a.order_time || a.created_at || ""))
-    );
     list.innerHTML = orders.map(orderCard).join("");
     $$(".card[data-order-id]", list).forEach((node) => {
       node.addEventListener("click", () => {
-        const order = state.orders.find((item) => String(item.id) === node.dataset.orderId);
+        const order = orders.find((item) => String(item.id) === node.dataset.orderId);
         if (order) openOrderSheet(order);
       });
     });
@@ -507,15 +581,22 @@
       </div>`;
   }
 
+  function safeUrl(value) {
+    const text = String(value || "").trim();
+    return /^https?:\/\//i.test(text) ? text : "";
+  }
+
   async function openOrderSheet(order) {
     const raw = parseRaw(order);
     const facts = orderFacts(order, raw);
     const links = [];
-    if (order.url) {
-      links.push(`<a href="${esc(order.url)}" target="_blank" rel="noreferrer">打开订单</a>`);
+    const orderUrl = safeUrl(order.url);
+    const productUrl = safeUrl(order.product_url);
+    if (orderUrl) {
+      links.push(`<a href="${esc(orderUrl)}" target="_blank" rel="noreferrer">打开订单</a>`);
     }
-    if (order.product_url) {
-      links.push(`<a href="${esc(order.product_url)}" target="_blank" rel="noreferrer">商品页</a>`);
+    if (productUrl) {
+      links.push(`<a href="${esc(productUrl)}" target="_blank" rel="noreferrer">商品页</a>`);
     }
     openSheet(`
       <div class="order-head">
@@ -724,8 +805,12 @@
             <option value="meituan">美团</option>
             <option value="douyin">抖音</option>
             <option value="jd">京东</option>
-            <option value="taobao">淘宝</option>
+            <option value="taobao">淘宝/天猫</option>
             <option value="pdd">拼多多</option>
+            <option value="xianyu">闲鱼</option>
+            <option value="zhuanzhuan">转转</option>
+            <option value="vip">唯品会</option>
+            <option value="xiaohongshu">小红书</option>
             <option value="other">其他</option>
           </select>
         </label>
@@ -769,8 +854,114 @@
     });
   }
 
-  async function exportData() {
+  // ------------------------------------------------------------------
+  // Multi-platform import
+  // ------------------------------------------------------------------
+  function bufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const chunk = 0x8000;
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+  function showImportResult(html, isError = false) {
+    const node = $("#importResult");
+    node.classList.remove("hidden");
+    node.classList.toggle("error", isError);
+    node.innerHTML = html;
+  }
+
+  async function importFile(file) {
+    if (!file) return;
+    if (file.size > 6 * 1024 * 1024) {
+      showImportResult("文件超过 6MB。支付宝账单请直接传 ZIP；平台导出如果很大，先解压只传 CSV。", true);
+      return;
+    }
+    showImportResult(`正在解析 <strong>${esc(file.name)}</strong>…`);
     try {
+      const data = bufferToBase64(await file.arrayBuffer());
+      const result = await api("/api/import/file", {
+        method: "POST",
+        body: JSON.stringify({ filename: file.name, data }),
+      });
+      const byPlatform = Object.entries(result.by_platform || {})
+        .map(([key, count]) => `${platformLabel(key)} ${count}`)
+        .join(" · ");
+      showImportResult(
+        `<strong>${esc(file.name)}</strong> · 新增 <strong>${result.created}</strong> · 更新 ${result.updated} · 跳过 ${result.skipped}`
+        + (byPlatform ? `<br>${esc(byPlatform)}` : "")
+        + (result.sources?.length ? `<br>识别为：${esc(result.sources.join(" / "))}` : "")
+      );
+      $("#importFile").value = "";
+      await loadDashboard({ silent: true });
+    } catch (error) {
+      showImportResult(esc(error.message), true);
+    }
+  }
+
+  function showImportHelp() {
+    const items = (state.platforms || []).filter((item) => item.id !== "other");
+    openSheet(`
+      <h2>怎么导出</h2>
+      <p class="muted small">首选「个人信息副本」：订单号、商品、金额、运单号最全，还能自动配平台。支付宝/微信账单适合补漏，但只有金额和商户。</p>
+      <div class="platform-list">
+        ${items.map((item) => `
+          <div class="platform-row" style="align-items:flex-start">
+            <span class="badge ${esc(item.id)}">${esc(item.label)}</span>
+            <span class="nums" style="white-space:normal;line-height:1.55">${esc(item.import_hint)}</span>
+          </div>`).join("")}
+      </div>
+      <p class="muted small" style="margin-top:14px">支付宝：支付宝 App → 我的 → 账单 → 右上角 … → 开具交易流水证明 → 用于个人对账，选时间范围，邮件收到 ZIP。<br>微信：微信 → 我 → 服务 → 钱包 → 账单 → 常见问题 → 下载账单 → 用于个人对账，邮件收到 CSV。</p>
+      <div class="button-row"><button class="btn primary" id="helpPickFile">选择文件导入</button></div>
+    `);
+    $("#helpPickFile").addEventListener("click", () => {
+      closeSheet();
+      $("#importFile").click();
+    });
+  }
+
+  async function queryTracking() {
+    const input = $("#trackingInput");
+    const trackingNo = input.value.trim().toUpperCase();
+    if (!trackingNo) { toast("先填运单号"); return; }
+    const node = $("#trackingResult");
+    node.textContent = "查询中…";
+    try {
+      const result = await api("/api/tracking/query", {
+        method: "POST",
+        body: JSON.stringify({ tracking_no: trackingNo }),
+      });
+      node.textContent = result.ok
+        ? `${result.carrier_name || ""} · ${STATUS_LABELS[result.state] || result.state} · ${result.events} 条轨迹${result.latest ? " · " + result.latest : ""}`
+        : `查不到：${result.error || "未知错误"}`;
+      if (result.ok) {
+        input.value = "";
+        await loadDashboard({ silent: true });
+      }
+    } catch (error) {
+      node.textContent = error.message;
+    }
+  }
+
+  async function importSmsBulk() {
+    const node = $("#smsBulkInput");
+    const texts = node.value.split("\n").map((line) => line.trim()).filter(Boolean);
+    if (!texts.length) { toast("先粘贴短信"); return; }
+    try {
+      const result = await api("/api/sms/bulk", {
+        method: "POST",
+        body: JSON.stringify({ texts }),
+      });
+      toast(`收到 ${result.received} 条，新增 ${result.created} 条`);
+      node.value = "";
+      await loadDashboard({ silent: true });
+    } catch (error) { toast(error.message); }
+  }
+
+  async function exportData() {    try {
       const data = await api("/api/export");
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const link = document.createElement("a");
@@ -851,12 +1042,6 @@
       renderParcels();
     }));
 
-    $$("#platformFilters .chip").forEach((node) => node.addEventListener("click", () => {
-      state.platform = node.dataset.platform || "";
-      $$("#platformFilters .chip").forEach((item) => item.classList.toggle("active", item === node));
-      runSearch();
-    }));
-
     $("#searchInput").addEventListener("input", (event) => {
       searchTouched = true;
       state.searchQuery = event.target.value;
@@ -878,6 +1063,17 @@
     document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeSheet(); });
 
     $("#pollParcelsBtn").addEventListener("click", pollParcels);
+    $("#importBtn").addEventListener("click", () => $("#importFile").click());
+    $("#importFile").addEventListener("change", (event) => {
+      const file = event.target.files && event.target.files[0];
+      importFile(file);
+    });
+    $("#importHelpBtn").addEventListener("click", showImportHelp);
+    $("#trackingBtn").addEventListener("click", queryTracking);
+    $("#trackingInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); queryTracking(); }
+    });
+    $("#smsBulkBtn").addEventListener("click", importSmsBulk);
     $("#enablePushBtn").addEventListener("click", enablePush);
     $("#disablePushBtn").addEventListener("click", disablePush);
     $("#testPushBtn").addEventListener("click", testPush);

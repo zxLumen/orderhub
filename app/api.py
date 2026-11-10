@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import gzip
 import hmac
 import json
@@ -16,15 +17,23 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from . import auth, config, db
+from . import auth, config, db, platforms
 from .collectors.jd import normalize_mode
 from .db import session, utc_now
+from .importers import parse_upload
 from .services import notifier, webpush
-from .services.ingest import ingest_capture, ingest_sms, poll_parcels, status_label
+from .services.imports import import_orders
+from .services.ingest import (
+    ingest_capture,
+    ingest_sms,
+    poll_parcels,
+    query_tracking,
+    status_label,
+)
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
@@ -56,6 +65,7 @@ def _public_config() -> dict[str, Any]:
         "auth_required": bool(config.TOKEN or config.PASSWORD_HASH),
         "login_required": bool(config.PASSWORD_HASH),
         "kuaidi100_configured": bool(config.KUAIDI100_CUSTOMER and config.KUAIDI100_KEY),
+        "kuaidi100_free": True,
         "webpush_configured": webpush.configured(),
         "jd_collector_enabled": config.ENABLE_JD_COLLECTOR,
         "scheduler_enabled": config.ENABLE_SCHEDULER,
@@ -92,7 +102,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data: blob: https://*.360buyimg.com; "
+            "default-src 'self'; img-src 'self' data: blob: https://*.360buyimg.com "
+            "https://*.alicdn.com https://*.taobao.com https://*.pinduoduo.com "
+            "https://*.yangkeduo.com https://*.douyinpic.com https://*.byteimg.com "
+            "https://*.zhuanzhuan.com https://*.goofish.com https://*.xiaohongshu.com; "
             "style-src 'self' 'unsafe-inline'; script-src 'self'; "
             "connect-src 'self'; manifest-src 'self'; worker-src 'self'",
         )
@@ -404,6 +417,34 @@ class Handler(BaseHTTPRequestHandler):
                     HTTPStatus.OK,
                     {"ok": True, "query": text, "items": _hydrate_search(conn, results)},
                 )
+            elif path == "/api/platforms":
+                stats = db.stats(conn)
+                counts = {
+                    row["platform"]: row for row in stats.get("platforms", [])
+                }
+                items = []
+                for item in platforms.registry():
+                    row = counts.get(item["id"], {})
+                    items.append(
+                        {
+                            **item,
+                            "orders": int(row.get("orders") or 0),
+                            "shipments": int(row.get("shipments") or 0),
+                            "last_order_at": row.get("last_order_at") or "",
+                        }
+                    )
+                self._json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "items": items,
+                        "unmapped": [
+                            key
+                            for key in stats.get("orders_by_platform", {})
+                            if key not in platforms.PLATFORMS
+                        ],
+                    },
+                )
             elif path == "/api/stats":
                 self._json(HTTPStatus.OK, {"ok": True, **_public_config(), **db.stats(conn)})
             elif path == "/api/collector/status":
@@ -494,6 +535,98 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, {"ok": True, "inserted": inserted})
             return
 
+        if path == "/api/import/file":
+            filename = str(payload.get("filename") or "upload").strip()[:160]
+            encoded = str(payload.get("data") or "")
+            if not encoded:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "data (base64) is required")
+            try:
+                data = base64.b64decode(encoded, validate=False)
+            except (ValueError, TypeError):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "invalid base64 data")
+            if len(data) > config.MAX_BODY_BYTES:
+                raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "file too large")
+            parsed = parse_upload(
+                data,
+                filename,
+                platform=str(payload.get("platform") or ""),
+                include_unknown=bool(payload.get("include_unknown")),
+            )
+            if not parsed.get("ok"):
+                raise ApiError(HTTPStatus.BAD_REQUEST, str(parsed.get("error") or "导入失败"))
+            with session() as conn:
+                applied = import_orders(conn, parsed["orders"], source="")
+                conn.commit()
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "filename": filename,
+                    "tables": parsed.get("tables") or [],
+                    "sources": parsed.get("sources") or [],
+                    "parsed": parsed.get("stats") or {},
+                    **applied,
+                },
+            )
+            return
+
+        if path == "/api/tracking/query":
+            tracking_no = str(payload.get("tracking_no") or "").strip()
+            if not tracking_no:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "tracking_no is required")
+            with session() as conn:
+                result = query_tracking(
+                    conn, tracking_no, carrier=str(payload.get("carrier") or "")
+                )
+                conn.commit()
+            if not result.get("ok"):
+                self._json(
+                    HTTPStatus.OK,
+                    {"ok": False, "error": result.get("error") or "查不到", "tracking_no": tracking_no},
+                )
+                return
+            self._json(HTTPStatus.OK, result)
+            return
+
+        if path == "/api/sms/bulk":
+            texts = payload.get("texts")
+            if not isinstance(texts, list):
+                text = str(payload.get("text") or "")
+                texts = [line for line in text.splitlines() if line.strip()]
+            results = []
+            with session() as conn:
+                for item in texts[:200]:
+                    if isinstance(item, dict):
+                        value = str(item.get("text") or "").strip()
+                        sender = str(item.get("sender") or "")
+                    else:
+                        value = str(item or "").strip()
+                        sender = str(payload.get("sender") or "")
+                    if not value:
+                        continue
+                    results.append(
+                        ingest_sms(
+                            conn,
+                            text=value,
+                            sender=sender,
+                            received_at=payload.get("received_at"),
+                        )
+                    )
+                conn.commit()
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "received": len(results),
+                    "created": sum(1 for item in results if item.get("created")),
+                    "items": [
+                        {"created": item.get("created"), "parsed": item.get("parsed")}
+                        for item in results
+                    ],
+                },
+            )
+            return
+
         if path == "/api/alerts/read":
             alert_id = payload.get("id")
             with session() as conn:
@@ -519,6 +652,15 @@ class Handler(BaseHTTPRequestHandler):
                 {"ok": True, "queued": True, "command_id": command_id, "mode": mode},
             )
             return
+
+        if path.startswith("/api/collectors/") and path.endswith("/run"):
+            platform = path.split("/")[3]
+            if platform != "jd":
+                raise ApiError(
+                    HTTPStatus.BAD_REQUEST,
+                    f"{platforms.label(platform)} 还没有浏览器采集器，请用账单/订单导出导入",
+                )
+            raise ApiError(HTTPStatus.NOT_FOUND, "not found")
 
         if path == "/api/push/subscribe":
             subscription = payload.get("subscription") if isinstance(payload.get("subscription"), dict) else payload
@@ -672,6 +814,7 @@ def _insert_order(conn: Any, payload: dict[str, Any]) -> int:
         product_url=payload.get("product_url") or None,
         image_url=payload.get("image_url") or None,
         logistics_text=payload.get("logistics_text") or None,
+        source=payload.get("source") or None,
         raw=payload.get("raw"),
     )
 

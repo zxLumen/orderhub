@@ -1,3 +1,4 @@
+import base64
 import gzip
 import http.client
 import json
@@ -346,6 +347,94 @@ class ApiTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
+
+    def test_import_file_then_platforms(self):
+        csv_text = (
+            "订单号,下单时间,商品名称,店铺名称,订单金额,订单状态,运单号,快递公司\n"
+            "TB1,2026-11-01 12:00:00,机械键盘,某店,299.00,已发货,SF1234567890123,顺丰\n"
+            "TB2,2026-11-02 12:00:00,显示器支架,某店,159.00,已完成,,\n"
+        )
+        payload = {
+            "filename": "taobao_orders.csv",
+            "data": base64.b64encode(csv_text.encode("utf-8")).decode("ascii"),
+        }
+        status, result, _ = self.request(
+            "POST", "/api/import/file", payload, token="testtoken"
+        )
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["created"], 2)
+        self.assertEqual(result["by_platform"]["taobao"], 2)
+
+        status, platforms, _ = self.request("GET", "/api/platforms", token="testtoken")
+        self.assertEqual(status, 200)
+        taobao = next(item for item in platforms["items"] if item["id"] == "taobao")
+        self.assertEqual(taobao["orders"], 2)
+        self.assertIn("export", taobao["channels"])
+        self.assertIn("xianyu", [item["id"] for item in platforms["items"]])
+
+        status, orders, _ = self.request(
+            "GET", "/api/orders?platform=taobao", token="testtoken"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(orders["items"]), 2)
+        self.assertEqual(orders["items"][0]["source"], "export")
+
+        status, result, _ = self.request(
+            "POST", "/api/import/file", payload, token="testtoken"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["updated"], 2)
+
+    def test_import_rejects_bad_file(self):
+        status, result, _ = self.request(
+            "POST",
+            "/api/import/file",
+            {"filename": "x.txt", "data": base64.b64encode(b"hello").decode("ascii")},
+            token="testtoken",
+        )
+        self.assertEqual(status, 400)
+        self.assertFalse(result["ok"])
+
+    def test_tracking_query_endpoint(self):
+        result = {
+            "ok": True,
+            "type": "yuantong",
+            "carrier_name": "圆通速递",
+            "state": "in_transit",
+            "events": [{"time": "2026-11-10 09:00:00", "context": "已到达北京转运中心", "status": ""}],
+        }
+        with patch("app.services.ingest.kuaidi_web.query", return_value=result):
+            status, payload, _ = self.request(
+                "POST",
+                "/api/tracking/query",
+                {"tracking_no": "YT1234567890123"},
+                token="testtoken",
+            )
+        self.assertEqual(status, 200, payload)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["state"], "in_transit")
+        status, payload, _ = self.request(
+            "GET", "/api/shipments/YT1234567890123", token="testtoken"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["item"]["events"]), 1)
+
+    def test_sms_bulk_endpoint(self):
+        status, payload, _ = self.request(
+            "POST",
+            "/api/sms/bulk",
+            {
+                "texts": [
+                    "【拼多多】您的包裹已存放至阳光花园菜鸟驿站，取件码 8-2-1234。",
+                    "【顺丰速运】您的快件 SF1234567890123 已签收。",
+                ]
+            },
+            token="testtoken",
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["received"], 2)
+        self.assertEqual(payload["created"], 2)
 
     def test_refuses_public_bind_without_token(self):
         old_host, old_token = config.HOST, config.TOKEN

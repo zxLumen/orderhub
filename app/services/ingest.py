@@ -20,7 +20,7 @@ from ..db import (
     upsert_shipment,
 )
 from ..parsers.sms import parse_sms
-from . import kuaidi100, notifier
+from . import kuaidi100, kuaidi_web, notifier
 
 log = logging.getLogger(__name__)
 
@@ -316,67 +316,157 @@ def poll_parcels(conn: sqlite3.Connection, *, limit: int = 20) -> dict[str, Any]
         _POLL_LOCK.release()
 
 
-def _poll_parcels_impl(conn: sqlite3.Connection, *, limit: int = 20) -> dict[str, Any]:
-    """Refresh active shipments via Kuaidi100. Safe to call when unconfigured."""
-    if not kuaidi100.configured():
-        return {"ok": False, "error": "not_configured", "checked": 0, "updated": 0}
+def _apply_tracking_result(
+    conn: sqlite3.Connection,
+    *,
+    shipment: dict[str, Any],
+    result: dict[str, Any],
+    source: str,
+) -> bool:
+    """Upsert one query result; return True when status or events changed."""
+    tracking_no = shipment["tracking_no"]
+    new_status = result.get("state") or "unknown"
+    events = result.get("events") or []
+    event_times = [
+        normalize_time(event.get("time")) for event in events if event.get("time")
+    ]
+    latest_event_at = max((value for value in event_times if value), default=None)
+    latest_event_at = latest_event_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    candidates = [
-        shipment
-        for shipment in list_shipments(conn, active_only=True, limit=max(limit * 3, 60))
-        if shipment.get("carrier") in kuaidi100.COM_MAP
-    ][:limit]
+    carrier = kuaidi_web.normalize_carrier(shipment.get("carrier") or "")
+    if not carrier:
+        carrier = kuaidi_web.CODE_BY_TYPE.get(str(result.get("type") or ""), "")
+    carrier_name = result.get("carrier_name") or shipment.get("carrier_name") or ""
+    event_count = conn.execute(
+        "SELECT COUNT(*) FROM parcel_events WHERE tracking_no=?", (tracking_no,)
+    ).fetchone()[0]
+    _, status_changed = upsert_shipment(
+        conn,
+        tracking_no=tracking_no,
+        carrier=carrier,
+        carrier_name=carrier_name,
+        platform=shipment.get("platform") or "",
+        status=new_status,
+        status_text=status_label(new_status),
+        last_event_at=latest_event_at,
+        # A row created from an order/SMS may only have a synthetic updated_at;
+        # without stored events the first real trace is authoritative.
+        trusted=not bool(event_count),
+    )
+    added = 0
+    for event in events:
+        if add_parcel_event(
+            conn,
+            tracking_no=tracking_no,
+            event_time=event.get("time"),
+            context=event.get("context") or "",
+            status=new_status,
+            source=source,
+        ):
+            added += 1
+    if status_changed and new_status in PUSH_STATUSES:
+        body_parts = [f"运单 {tracking_no}"]
+        if shipment.get("pickup_code"):
+            body_parts.append(f"取件码 {shipment['pickup_code']}")
+        if shipment.get("location"):
+            body_parts.append(shipment["location"])
+        _notify(
+            conn,
+            kind=f"parcel_{new_status}",
+            title=f"{status_label(new_status)} · {carrier_name or '包裹'}",
+            body=" · ".join(body_parts),
+        )
+    return status_changed or added > 0
+
+
+def query_tracking(conn: sqlite3.Connection, tracking_no: str, carrier: str = "") -> dict[str, Any]:
+    """Query a single waybill now (paid API first, free web query otherwise)."""
+    shipment = None
+    row = conn.execute(
+        "SELECT * FROM shipments WHERE tracking_no=?", (tracking_no.upper(),)
+    ).fetchone()
+    if row:
+        shipment = dict(row)
+    carrier = carrier or (shipment.get("carrier") if shipment else "")
+
+    if kuaidi100.configured() and kuaidi100.COM_MAP.get(
+        kuaidi_web.normalize_carrier(carrier or "")
+    ):
+        result = kuaidi100.query(
+            kuaidi_web.normalize_carrier(carrier or ""), tracking_no,
+            phone=config.KUAIDI100_PHONE,
+        )
+        source = "kuaidi100"
+    else:
+        result = kuaidi_web.query(tracking_no, carrier or "")
+        source = "kuaidi_web"
+
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("error") or "not_found", "tracking_no": tracking_no}
+
+    if shipment is None:
+        shipment = {
+            "tracking_no": tracking_no.upper(),
+            "carrier": carrier or "",
+            "carrier_name": "",
+            "platform": "",
+            "pickup_code": "",
+            "location": "",
+        }
+
+    changed = _apply_tracking_result(conn, shipment=shipment, result=result, source=source)
+    return {
+        "ok": True,
+        "tracking_no": tracking_no.upper(),
+        "source": source,
+        "changed": changed,
+        "state": result.get("state"),
+        "carrier_name": result.get("carrier_name") or shipment.get("carrier_name") or "",
+        "events": len(result.get("events") or []),
+        "latest": (result.get("events") or [{}])[0].get("context", "")[:160],
+    }
+
+
+def _poll_parcels_impl(conn: sqlite3.Connection, *, limit: int = 20) -> dict[str, Any]:
+    """Refresh active shipments: paid Kuaidi100 when configured, free web otherwise."""
+    paid = kuaidi100.configured()
+    candidates = list_shipments(conn, active_only=True, limit=max(limit * 3, 60))
+    if paid:
+        supported = [
+            item for item in candidates
+            if kuaidi100.COM_MAP.get(kuaidi_web.normalize_carrier(item.get("carrier") or ""))
+        ]
+        candidates = supported or candidates
+    candidates = candidates[: max(1, limit)]
 
     checked = 0
     updated = 0
     errors: list[str] = []
     for shipment in candidates:
         tracking_no = shipment["tracking_no"]
-        phone = config.KUAIDI100_PHONE
-        result = kuaidi100.query(shipment.get("carrier") or "", tracking_no, phone=phone)
+        carrier = shipment.get("carrier") or ""
+        if paid and kuaidi100.COM_MAP.get(kuaidi_web.normalize_carrier(carrier)):
+            result = kuaidi100.query(
+                kuaidi_web.normalize_carrier(carrier), tracking_no,
+                phone=config.KUAIDI100_PHONE,
+            )
+            source = "kuaidi100"
+        else:
+            result = kuaidi_web.query(tracking_no, carrier)
+            source = "kuaidi_web"
         checked += 1
         if not result.get("ok"):
             errors.append(f"{tracking_no}: {result.get('error')}")
             continue
-        new_status = result.get("state") or "unknown"
-        events = result.get("events") or []
-        event_times = [normalize_time(event.get("time")) for event in events if event.get("time")]
-        latest_event_at = max((value for value in event_times if value), default=None)
-        latest_event_at = latest_event_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
-        _, status_changed = upsert_shipment(
-            conn,
-            tracking_no=tracking_no,
-            carrier=shipment.get("carrier") or "",
-            carrier_name=shipment.get("carrier_name") or "",
-            platform=shipment.get("platform") or "",
-            status=new_status,
-            status_text=status_label(new_status),
-            last_event_at=latest_event_at,
-        )
-        added = 0
-        for event in events:
-            if add_parcel_event(
-                conn,
-                tracking_no=tracking_no,
-                event_time=event.get("time"),
-                context=event.get("context") or "",
-                status=new_status,
-                source="kuaidi100",
-            ):
-                added += 1
-        if status_changed and new_status in PUSH_STATUSES:
-            body_parts = [f"运单 {tracking_no}"]
-            if shipment.get("pickup_code"):
-                body_parts.append(f"取件码 {shipment['pickup_code']}")
-            _notify(
-                conn,
-                kind=f"parcel_{new_status}",
-                title=f"{status_label(new_status)} · {shipment.get('carrier_name') or '包裹'}",
-                body=" · ".join(body_parts),
-            )
-        if status_changed or added:
+        if _apply_tracking_result(conn, shipment=shipment, result=result, source=source):
             updated += 1
-    return {"ok": True, "checked": checked, "updated": updated, "errors": errors[:5]}
+    return {
+        "ok": True,
+        "source": "kuaidi100" if paid else "kuaidi_web",
+        "checked": checked,
+        "updated": updated,
+        "errors": errors[:5],
+    }
 
 
 def poll_loop() -> None:

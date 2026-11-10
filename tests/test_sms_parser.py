@@ -16,6 +16,7 @@ class SmsParserTest(unittest.TestCase):
         self.assertEqual(parsed.pickup_code, "8-2-1234")
         self.assertIn("菜鸟驿站", parsed.location)
         self.assertEqual(parsed.platform, "")
+        self.assertEqual(parsed.tracking_numbers, ["SF1234567890123"])
 
     def test_cainiao_is_logistics_not_platform(self):
         parsed = parse_sms(

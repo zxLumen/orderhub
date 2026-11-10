@@ -33,6 +33,7 @@
     <main id="main">
       <section class="view" id="view-recent">
         <div class="summary-grid" id="summaryGrid"></div>
+        <div class="filter-row" id="recentPlatforms"></div>
         <div class="section-head">
           <h2>最近订单</h2>
           <span class="muted" id="recentHint"></span>
@@ -64,16 +65,49 @@
         </div>
         <div class="filter-row" id="platformFilters">
           <button class="chip active" data-platform="">全部</button>
-          <button class="chip" data-platform="jd">京东</button>
-          <button class="chip" data-platform="taobao">淘宝</button>
-          <button class="chip" data-platform="douyin">抖音</button>
-          <button class="chip" data-platform="meituan">美团</button>
         </div>
         <div id="searchMeta" class="muted search-meta"></div>
         <div id="searchList" class="list"></div>
       </section>
 
       <section class="view hidden" id="view-more">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>导入订单</h2>
+            <span class="muted" id="importState">支付宝 / 微信 / 平台导出</span>
+          </div>
+          <p class="muted small">支持支付宝账单 ZIP/CSV、微信支付账单 CSV、各平台「个人信息副本」CSV/XLSX/JSON/ZIP。重复导入不会重复计单。</p>
+          <input type="file" id="importFile" accept=".csv,.zip,.xlsx,.json,.txt" hidden>
+          <div class="button-row">
+            <button class="btn primary" id="importBtn">选择文件导入</button>
+            <button class="btn ghost" id="importHelpBtn">怎么导出</button>
+          </div>
+          <div id="importResult" class="import-result hidden"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>平台覆盖</h2>
+            <span class="muted" id="platformCount"></span>
+          </div>
+          <div id="platformList" class="platform-list"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>补物流</h2><span class="muted">快递100 免 key</span></div>
+          <div class="button-row">
+            <input id="trackingInput" placeholder="运单号，例如 SF1234567890123" autocomplete="off">
+            <button class="btn" id="trackingBtn">查询</button>
+          </div>
+          <div id="trackingResult" class="muted small"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><h2>粘贴短信</h2><span class="muted">每行一条，批量补运单</span></div>
+          <textarea id="smsBulkInput" rows="4" placeholder="【拼多多】您的包裹已存放至…&#10;【抖音】商家已发货，运单号 JT1234567890"></textarea>
+          <div class="button-row"><button class="btn" id="smsBulkBtn">导入短信</button></div>
+        </div>
+
         <div class="panel">
           <div class="panel-head">
             <h2>系统状态</h2>

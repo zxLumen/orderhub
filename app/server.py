@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from . import config, db
-from .api import serve
+from .api import VERSION, serve
 from .lockfile import InstanceLock
 from .scheduler import Scheduler
 
@@ -35,7 +35,7 @@ def main() -> None:
             scheduler.start()
         log.info(
             "OrderHub %s | data=%s | auth=%s | kuaidi100=%s | jd=%s",
-            "0.1.0",
+            VERSION,
             config.DB_PATH,
             "on" if config.TOKEN else "off",
             "on" if config.KUAIDI100_CUSTOMER and config.KUAIDI100_KEY else "off",

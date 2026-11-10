@@ -67,7 +67,7 @@ TRACKING_PREFIX = re.compile(
     re.I,
 )
 EMS_PATTERN = re.compile(r"\b[A-Z]{2}\d{9}[A-Z]{2}\b", re.I)
-NUMERIC_TRACKING = re.compile(r"(?<!\d)(\d{12,20})(?!\d)")
+NUMERIC_TRACKING = re.compile(r"(?<![A-Za-z0-9])(\d{12,20})(?![0-9A-Za-z])")
 ORDER_ID = re.compile(
     r"(?:订单号|订单编号|订单\s*ID)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9-]{5,29})",
     re.I,
@@ -100,12 +100,15 @@ STATUS_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 PLATFORM_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ("jd", ("京东", "京东商城")),
-    ("taobao", ("淘宝", "天猫")),
-    ("douyin", ("抖音", "抖店", "抖音商城")),
+    ("taobao", ("淘宝", "天猫", "天猫超市", "淘工厂")),
+    ("douyin", ("抖音", "抖店", "抖音商城", "抖音电商")),
     ("meituan", ("美团", "美团外卖", "美团买菜", "小象超市")),
-    ("pdd", ("拼多多", "多多买菜")),
+    ("pdd", ("拼多多", "多多买菜", "拼小圈")),
+    ("xianyu", ("闲鱼", "闲鱼小铺")),
+    ("zhuanzhuan", ("转转", "转转二手", "采货侠")),
     ("vip", ("唯品会",)),
-    ("eleme", ("饿了么",)),
+    ("eleme", ("饿了么", "饿了么星选")),
+    ("xiaohongshu", ("小红书", "薯店")),
 ]
 
 PLATFORM_PREFIX = re.compile(r"^\s*【([^】]{1,16})】")

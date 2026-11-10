@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS orders (
     product_url TEXT,
     image_url TEXT,
     logistics_text TEXT,
+    source TEXT NOT NULL DEFAULT '',
     raw_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -338,7 +339,7 @@ def init_db(db_path: Path | None = None) -> None:
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add columns introduced after the first release of the schema."""
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(orders)")}
-    for name in ("image_url", "product_url", "logistics_text"):
+    for name in ("image_url", "product_url", "logistics_text", "source"):
         if name not in columns:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {name} TEXT")
     shipment_columns = {row["name"] for row in conn.execute("PRAGMA table_info(shipments)")}
@@ -506,6 +507,7 @@ def upsert_order(
     product_url: str | None = None,
     image_url: str | None = None,
     logistics_text: str | None = None,
+    source: str | None = None,
     raw: Any = None,
 ) -> int:
     platform = (platform or "unknown").strip().lower()
@@ -514,6 +516,7 @@ def upsert_order(
     image_url = (image_url or "").strip() or None
     product_url = (product_url or "").strip() or None
     logistics_text = (logistics_text or "").strip() or None
+    source = (source or "").strip()
     platform_order_id = (platform_order_id or "").strip() or _synthetic_order_id(
         platform, title, amount, order_time, tracking_no
     )
@@ -523,8 +526,8 @@ def upsert_order(
         """
         INSERT INTO orders(platform, platform_order_id, title, shop, amount, status,
                            status_text, order_time, tracking_no, url, product_url,
-                           image_url, logistics_text, raw_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           image_url, logistics_text, source, raw_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(platform, platform_order_id) DO UPDATE SET
             title=COALESCE(NULLIF(excluded.title, ''), orders.title),
             shop=COALESCE(NULLIF(excluded.shop, ''), orders.shop),
@@ -537,6 +540,7 @@ def upsert_order(
             product_url=COALESCE(NULLIF(excluded.product_url, ''), orders.product_url),
             image_url=COALESCE(NULLIF(excluded.image_url, ''), orders.image_url),
             logistics_text=COALESCE(NULLIF(excluded.logistics_text, ''), orders.logistics_text),
+            source=COALESCE(NULLIF(excluded.source, ''), orders.source),
             raw_json=COALESCE(excluded.raw_json, orders.raw_json),
             updated_at=excluded.updated_at
         """,
@@ -554,6 +558,7 @@ def upsert_order(
             product_url,
             image_url,
             logistics_text,
+            source,
             raw_json,
             now,
             now,
@@ -610,6 +615,7 @@ def upsert_shipment(
     last_event_at: str | None = None,
     order_id: int | None = None,
     raw: Any = None,
+    trusted: bool = False,
 ) -> tuple[int, bool]:
     """Upsert a shipment; returns (rowid, status_changed).
 
@@ -659,7 +665,7 @@ def upsert_shipment(
     else:
         old_status = existing["status"] or "unknown"
         old_event_at = existing["last_event_at"]
-        stale = bool(old_event_at and event_at < old_event_at)
+        stale = bool(not trusted and old_event_at and event_at < old_event_at)
         effective_status = old_status if (stale or status == "unknown") else status
         changed = effective_status != old_status
 
@@ -1220,7 +1226,7 @@ def list_orders(
     sql = (
         "SELECT id, platform, platform_order_id, title, shop, amount, status, "
         "status_text, order_time, tracking_no, url, product_url, image_url, "
-        "logistics_text, created_at, updated_at, "
+        "logistics_text, source, created_at, updated_at, "
         "(SELECT COUNT(*) FROM order_shipments os WHERE os.order_id=orders.id) "
         "AS shipment_count FROM orders"
     )
@@ -1314,6 +1320,14 @@ def stats(conn: sqlite3.Connection) -> dict[str, Any]:
             "SELECT platform, COUNT(*) AS n FROM orders GROUP BY platform"
         ).fetchall()
     }
+    platform_rows = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT o.platform, COUNT(*) AS orders, MAX(o.order_time) AS last_order_at, "
+            "(SELECT COUNT(*) FROM shipments s WHERE s.platform=o.platform) AS shipments "
+            "FROM orders o GROUP BY o.platform ORDER BY orders DESC"
+        ).fetchall()
+    ]
     return {
         "orders": one("SELECT COUNT(*) FROM orders"),
         "shipments": one("SELECT COUNT(*) FROM shipments"),
@@ -1324,6 +1338,13 @@ def stats(conn: sqlite3.Connection) -> dict[str, Any]:
         "captures": one("SELECT COUNT(*) FROM captures"),
         "alerts": one("SELECT COUNT(*) FROM alerts WHERE read=0"),
         "orders_by_platform": by_platform,
+        "platforms": platform_rows,
+        "sources": {
+            row["source"] or "unknown": int(row["n"])
+            for row in conn.execute(
+                "SELECT source, COUNT(*) AS n FROM orders GROUP BY source"
+            ).fetchall()
+        },
         "last_sms": (
             dict(
                 conn.execute(
