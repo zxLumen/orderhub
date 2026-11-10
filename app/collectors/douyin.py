@@ -171,17 +171,73 @@ def refresh_cookies_from_emulator() -> dict[str, str]:
     return cookies
 
 
-def load_cookies(*, refresh: bool = True) -> dict[str, str]:
-    if COOKIE_FILE.exists():
+def refresh_cookies_from_chrome() -> dict[str, str]:
+    """Read the session from the already-logged-in Chrome (9333).
+
+    Douyin's web login writes its passport cookies on ``.douyin.com`` while the
+    order API lives on ``.snssdk.com``; the session id is the same, so sending
+    the collected cookies by hand is enough. No emulator required.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise DouyinAuthError("playwright_not_installed") from exc
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.connect_over_cdp(config.JD_CDP_URL)
+        contexts = browser.contexts
+        cookies = contexts[0].cookies() if contexts else []
+
+    picked: dict[str, str] = {}
+    for domain in (".snssdk.com", ".douyin.com", ".ecombdapi.com", ".amemv.com"):
+        for cookie in cookies:
+            name = str(cookie.get("name") or "")
+            if cookie.get("domain") == domain and name in COOKIE_NAMES:
+                picked.setdefault(name, str(cookie.get("value") or ""))
+    if not picked.get("sessionid"):
+        raise DouyinAuthError("douyin_not_logged_in_chrome")
+    picked = {name: value for name, value in picked.items() if value}
+
+    COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COOKIE_FILE.write_text(json.dumps(picked, ensure_ascii=False, indent=1), encoding="utf-8")
+    log.info("refreshed Douyin cookies from Chrome (%s keys)", len(picked))
+    return picked
+
+
+def refresh_cookies() -> dict[str, str]:
+    """Chrome first (no emulator needed), rooted emulator as a fallback."""
+    errors: list[str] = []
+    for label, refresh in (
+        ("chrome", refresh_cookies_from_chrome),
+        ("emulator", refresh_cookies_from_emulator),
+    ):
         try:
-            data = json.loads(COOKIE_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data.get("sessionid"):
-                return {k: str(v) for k, v in data.items() if k in COOKIE_NAMES}
-        except (OSError, ValueError):
-            pass
+            return refresh()
+        except Exception as exc:
+            errors.append(f"{label}: {exc}")
+            log.warning("cookie refresh via %s failed: %s", label, exc)
+    raise DouyinAuthError("douyin_login_required (" + "; ".join(errors) + ")")
+
+
+def _read_cookie_file() -> dict[str, str] | None:
+    if not COOKIE_FILE.exists():
+        return None
+    try:
+        data = json.loads(COOKIE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("sessionid"):
+        return None
+    return {k: str(v) for k, v in data.items() if k in COOKIE_NAMES and v}
+
+
+def load_cookies(*, refresh: bool = True) -> dict[str, str]:
+    cached = _read_cookie_file()
+    if cached:
+        return cached
     if not refresh:
         raise DouyinAuthError("douyin_login_required")
-    return refresh_cookies_from_emulator()
+    return refresh_cookies()
 
 
 def _cookie_header(cookies: dict[str, str]) -> str:
@@ -310,8 +366,8 @@ def collect_douyin(mode: str = "recent", *, max_pages: int = 50) -> dict[str, An
         try:
             batches = _fetch_all(cookies, max_pages)
         except DouyinAuthError:
-            log.warning("Douyin cookies rejected; refreshing from emulator")
-            cookies = refresh_cookies_from_emulator()
+            log.warning("Douyin cookies rejected; refreshing login state")
+            cookies = refresh_cookies()
             batches = _fetch_all(cookies, max_pages)
 
         orders = [mapped for batch in batches for item in batch if (mapped := to_order(item))]
@@ -353,22 +409,34 @@ def _fetch_all(cookies: dict[str, str], max_pages: int) -> list[list[dict[str, A
         if not batch:
             break
         batches.append(batch)
-    if not batches:
-        # A logged-out session can also come back as a single empty page.
-        raise DouyinAuthError("douyin_empty_result")
     return batches
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Collect Douyin orders via the e-commerce API")
-    parser.add_argument("--refresh", action="store_true", help="only refresh cookies from the emulator")
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="only refresh cookies (Chrome first, emulator fallback)",
+    )
+    parser.add_argument(
+        "--source",
+        choices=("auto", "chrome", "emulator"),
+        default="auto",
+        help="cookie source for --refresh",
+    )
     parser.add_argument("--json", action="store_true", help="print mapped orders as JSON")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     if args.refresh:
-        cookies = refresh_cookies_from_emulator()
+        if args.source == "chrome":
+            cookies = refresh_cookies_from_chrome()
+        elif args.source == "emulator":
+            cookies = refresh_cookies_from_emulator()
+        else:
+            cookies = refresh_cookies()
         print(f"refreshed {len(cookies)} cookies -> {COOKIE_FILE}")
         return 0
 

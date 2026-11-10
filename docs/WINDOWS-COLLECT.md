@@ -53,7 +53,20 @@
 
 ## 抖音 / 转转
 
-抖音不再走网页 / OCR。App 的订单列表背后是电商 JSON 接口 `ec.snssdk.com/order/page`，只需要登录 Cookie + App 参数，不需要 OCR、Frida 或逐个点订单。agent 会从已 root 的 MuMu 模拟器里读取 WebView 的 Cookie（`app_webview/Default/Cookies`，明文），调用接口拉全部订单，并按 6 小时自动跑一次。模拟器只要保持登录即可；Cookie 失效时 agent 会自动重新读取。
+抖音不再走网页 / OCR。App 的订单列表背后是电商 JSON 接口 `ec.snssdk.com/order/page`，只需要登录 Cookie + App 参数，不需要 OCR、Frida 或逐个点订单。
+
+登录态来源按优先级自动选择：
+
+1. 已登录的 Chrome 9333（在 Chrome 里打开 `https://www.douyin.com/` 扫码登录一次即可，不需要模拟器）
+2. 已 root 的 MuMu 模拟器 WebView（`app_webview/Default/Cookies`，明文）
+
+agent 每 6 小时自动拉一次。Cookie 失效时会重新按上面的顺序刷新；模拟器不是必须常驻。
+
+只用 Chrome 刷新的命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.collectors.douyin --refresh --source chrome
+```
 
 手动验证：
 
