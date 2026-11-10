@@ -33,7 +33,7 @@ from .services.ingest import (
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
@@ -73,6 +73,14 @@ def _public_config() -> dict[str, Any]:
         "parcel_poll_seconds": config.PARCEL_POLL_SECONDS,
         "jd_interval_seconds": config.JD_INTERVAL_SECONDS,
     }
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    parts = []
+    for piece in str(value or "").split("."):
+        digits = "".join(char for char in piece if char.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts[:3]) or (0,)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -660,12 +668,35 @@ class Handler(BaseHTTPRequestHandler):
 
         if path.startswith("/api/collectors/") and path.endswith("/run"):
             platform = path.split("/")[3]
-            if platform != "jd":
+            if "agent" not in platforms.channels(platform):
                 raise ApiError(
                     HTTPStatus.BAD_REQUEST,
                     f"{platforms.label(platform)} 还没有浏览器采集器，请用账单/订单导出导入",
                 )
-            raise ApiError(HTTPStatus.NOT_FOUND, "not found")
+            mode = normalize_mode(payload.get("mode"))
+            with session() as conn:
+                worker = db.get_worker(conn)
+                if (
+                    platform != "jd"
+                    and worker
+                    and _version_tuple(worker.get("version") or "") < (0, 4, 0)
+                ):
+                    raise ApiError(
+                        HTTPStatus.CONFLICT,
+                        f"Windows 采集器是 v{worker.get('version') or '?'}，五平台采集需要 v0.4.0，请先更新 agent",
+                    )
+                command_id = db.enqueue_command(conn, platform=platform, mode=mode)
+            self._json(
+                HTTPStatus.ACCEPTED,
+                {
+                    "ok": True,
+                    "queued": True,
+                    "command_id": command_id,
+                    "platform": platform,
+                    "mode": mode,
+                },
+            )
+            return
 
         if path == "/api/push/subscribe":
             subscription = payload.get("subscription") if isinstance(payload.get("subscription"), dict) else payload

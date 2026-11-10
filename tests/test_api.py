@@ -369,7 +369,11 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(status, 200)
         taobao = next(item for item in platforms["items"] if item["id"] == "taobao")
         self.assertEqual(taobao["orders"], 2)
+        self.assertIn("agent", taobao["channels"])
         self.assertIn("export", taobao["channels"])
+        self.assertEqual(taobao["agent_status"], "ready")
+        douyin = next(item for item in platforms["items"] if item["id"] == "douyin")
+        self.assertEqual(douyin["agent_status"], "experimental")
         self.assertIn("xianyu", [item["id"] for item in platforms["items"]])
 
         status, orders, _ = self.request(
@@ -435,6 +439,46 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["received"], 2)
         self.assertEqual(payload["created"], 2)
+
+    def test_collector_platform_queue(self):
+        status, payload, _ = self.request(
+            "POST", "/api/collectors/taobao/run", {"mode": "recent"}, token="testtoken"
+        )
+        self.assertEqual(status, 202, payload)
+        self.assertTrue(payload["queued"])
+        self.assertEqual(payload["platform"], "taobao")
+        command_id = payload["command_id"]
+
+        status, payload, _ = self.request(
+            "GET", "/api/collector/commands/next?worker=win", token="testtoken"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["command"]["id"], command_id)
+        self.assertEqual(payload["command"]["platform"], "taobao")
+
+        status, payload, _ = self.request(
+            "POST", "/api/collectors/meituan/run", {}, token="testtoken"
+        )
+        self.assertEqual(status, 400)
+        self.assertFalse(payload["ok"])
+
+    def test_web_collector_requires_new_agent(self):
+        self.request(
+            "POST",
+            "/api/collector/heartbeat",
+            {"name": "win", "chrome_ok": True, "version": "0.3.0"},
+            token="testtoken",
+        )
+        status, payload, _ = self.request(
+            "POST", "/api/collectors/taobao/run", {}, token="testtoken"
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("v0.4.0", payload["error"])
+        # JD keeps working with the old agent.
+        status, payload, _ = self.request(
+            "POST", "/api/collectors/jd/run", {}, token="testtoken"
+        )
+        self.assertEqual(status, 202)
 
     def test_refuses_public_bind_without_token(self):
         old_host, old_token = config.HOST, config.TOKEN

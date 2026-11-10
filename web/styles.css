@@ -371,7 +371,7 @@ textarea#smsBulkInput:focus { border-color: var(--brand); }
 .platform-list { display: flex; flex-direction: column; gap: 7px; }
 .platform-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px 10px;
   padding: 9px 10px;
@@ -390,6 +390,19 @@ textarea#smsBulkInput:focus { border-color: var(--brand); }
   border-radius: 999px; padding: 1px 6px; white-space: nowrap;
 }
 .channel.on { color: var(--green); border-color: rgba(5, 150, 105, 0.25); background: var(--green-soft); }
+.mini-btn {
+  height: 22px;
+  border: 1px solid var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1;
+  align-self: center;
+}
+.mini-btn:active { transform: scale(0.96); }
 .import-result {
   margin-top: 12px; padding: 10px 12px; border-radius: 11px;
   background: var(--brand-soft); color: var(--text-2);

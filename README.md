@@ -25,6 +25,7 @@
 - 抖音抓屏入库：`POST /api/captures`
 - 手动补单：PWA → 更多 → 手动添加（美团外卖、抖音、任何漏掉的单）
 - 京东采集：CDP 接管真实 Chrome，记录验证码次数
+- 淘宝 / 拼多多 / 闲鱼浏览器采集：同一 Chrome 登录态，嗅探订单页 JSON + 文本兜底（Windows agent；抖音/转转网页入口不稳定，可用 `ORDERHUB_URL_*` 覆盖）
 - 京东物流：从订单详情 `pcdetail_traceMultiPackage` 提取多包裹、运单号、承运商和完整轨迹
 - 订单 ↔ 包裹：`order_shipments` 多对多绑定
 - Web Push：待取件、派送中、签收、外卖状态（需 VAPID 配置）
@@ -39,7 +40,7 @@
 ## 还没做（下一步）
 
 - 平台个人信息副本的真实样本校对（京东/淘宝/拼多多/抖音/闲鱼/转转各一份）
-- 淘宝 / 拼多多 / 抖音 / 闲鱼 / 转转的浏览器采集器（需要登录态；服务端没有浏览器，暂不做假采集）
+- 抖音 / 转转稳定订单入口（目前只有实验性首页导航 + URL 覆盖）
 - 退货 / 价保倒计时
 - 商品图片缓存（目前直接引用平台 CDN，CSP 已加常见白名单）
 
@@ -71,6 +72,19 @@ JD_CDP_URL=http://127.0.0.1:9333
 
 ```bat
 scripts\start_agent.bat
+```
+
+更新到支持五平台采集的 v0.4.0（拉代码、装依赖、重启 agent）：
+
+```bat
+scripts\update_agent.bat
+```
+
+登录淘宝/拼多多/闲鱼：在这台 Windows 的 Chrome 9333 里登录一次，然后在 PWA「平台覆盖」点对应平台的「采集」。抖音/转转网页入口不稳定，必要时用登录后地址覆盖：
+
+```ini
+ORDERHUB_URL_DOUYIN=https://...
+ORDERHUB_URL_ZHUANZHUAN=https://...
 ```
 
 如果服务器是新建的，想先把 Windows 本地历史订单上传一次：

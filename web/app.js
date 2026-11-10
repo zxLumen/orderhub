@@ -293,6 +293,12 @@
     }
   }
 
+  function agentButton(item) {
+    if (!(item.channels || []).includes("agent")) return "";
+    const experimental = item.agent_status === "experimental";
+    return `<button type="button" class="mini-btn" data-collect="${esc(item.id)}" data-experimental="${experimental ? "1" : ""}" title="${experimental ? "网页订单入口不稳定，可能需要设置 ORDERHUB_URL" : "需要 Windows Chrome 已登录"}">${experimental ? "采集*" : "采集"}</button>`;
+  }
+
   function renderPlatforms() {
     const list = $("#platformList");
     if (!list) return;
@@ -307,6 +313,7 @@
           <div class="nums"><strong>${item.orders || 0}</strong> 单 · ${item.shipments || 0} 包裹${item.last_order_at ? ` · ${esc(timeText(item.last_order_at))}` : ""}</div>
           <div class="channels">${(item.channels || []).map((channel) => `<span class="channel ${item.orders > 0 ? "on" : ""}">${esc(channelNames[channel] || channel)}</span>`).join("")}</div>
         </div>
+        ${agentButton(item)}
       </div>`).join("") || empty("平台状态加载中", "");
     const select = $("#importPlatform");
     if (select && select.options.length <= 1) {
@@ -321,6 +328,12 @@
         switchTab("recent");
         renderPlatformFilters();
         renderRecent();
+      });
+    });
+    $$(".mini-btn[data-collect]", list).forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        runCollector(node.dataset.collect || "", node.dataset.experimental === "1");
       });
     });
   }
@@ -879,6 +892,27 @@
     node.classList.remove("hidden");
     node.classList.toggle("error", isError);
     node.innerHTML = html;
+  }
+
+  async function runCollector(platform, experimental = false) {
+    const label = platformLabel(platform);
+    const extra = experimental
+      ? `\n\n注意：${label} 的网页订单入口不稳定，采集器可能报 invalid_page；` +
+        `可在 Windows 的 .env 里设 ORDERHUB_URL_${platform.toUpperCase()}=<登录后订单页地址>。`
+      : "";
+    const ok = window.confirm(
+      `${label} 采集会打开你 Windows 电脑上的 Chrome，使用已登录账号读取订单页。\n\n` +
+      "需要：Chrome 已登录该平台；可能触发验证码。采集器离线时任务会排队。" + extra + "\n\n继续？"
+    );
+    if (!ok) return;
+    try {
+      await api(`/api/collectors/${encodeURIComponent(platform)}/run`, {
+        method: "POST",
+        body: JSON.stringify({ mode: "recent" }),
+      });
+      toast(state.collector?.online ? `已排队，${label} 采集马上开始` : `已排队；采集器离线，联网后执行`);
+      setTimeout(() => loadDashboard({ silent: true }), 8000);
+    } catch (error) { toast(error.message); }
   }
 
   async function importFile(file) {

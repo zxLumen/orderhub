@@ -1,11 +1,15 @@
 """Windows-side collector agent.
 
-Runs JD collection locally (Chrome + Playwright + local SQLite staging) and
+Runs order collection locally (Chrome + Playwright + local SQLite staging) and
 ships orders / run records / alerts to the server. The local database is only a
 durable outbox: the server remains the single source of truth for the web UI.
 
+Supported platforms: JD (dedicated) and Taobao / Pinduoduo / Douyin / Xianyu /
+Zhuanzhuan (generic browser collector, requires a logged-in Chrome).
+
     python -m app.collector_agent
     python -m app.collector_agent --once
+    python -m app.collector_agent --platform taobao
 """
 
 from __future__ import annotations
@@ -28,10 +32,12 @@ from typing import Any
 
 from . import config, db
 from .collectors.jd import collect_jd, normalize_mode
+from .collectors.web import SUPPORTED as WEB_PLATFORMS
+from .collectors.web import collect_web, login_url, order_url
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.1.0"
+VERSION = "0.4.0"
 STATE_FILE = "collector-sync.json"
 CHROME_MODE_FILE = Path(config.BASE_DIR) / "data" / "chrome-mode.txt"
 
@@ -214,8 +220,71 @@ class Agent:
         log.info("JD login restored; switching back to headless")
         self._switch_chrome("headless")
 
+    def _page_open(self, url: str) -> bool:
+        host = urllib.parse.urlparse(url).netloc
+        if not host:
+            return False
+        return any(host in str(page.get("url") or "") for page in self._chrome_pages())
+
+    def _open_platform_tab(self, url: str) -> bool:
+        """Open a tab in the user's Chrome and leave it open for manual login."""
+        if not url or not self._chrome_ok():
+            return False
+        endpoint = config.JD_CDP_URL.rstrip("/") + "/json/new?" + urllib.parse.quote(
+            url, safe=":/?=&%#"
+        )
+        for method in ("PUT", "GET"):
+            try:
+                request = urllib.request.Request(endpoint, method=method)
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    response.read()
+                return True
+            except Exception:
+                continue
+        log.warning("could not open Chrome tab for %s", url)
+        return False
+
+    def _ensure_platform_login(self, platform: str, state: str) -> None:
+        """On login/captcha, surface a visible Chrome and open the login page."""
+        if platform not in WEB_PLATFORMS:
+            return
+        self.state["pending_platform"] = platform
+        self.state["pending_state"] = state
+        self._save_state()
+        if not config.WEB_AUTO_LOGIN or not self._chrome_ok():
+            return
+        target = login_url(platform) or order_url(platform)
+        if self._page_open(target):
+            return
+        if self._chrome_mode() != "visible":
+            if not self._switch_chrome("visible"):
+                return
+        log.info("%s needs login; opened %s", platform, target)
+        self._open_platform_tab(target)
+
+    def _web_login_watch(self) -> None:
+        """Retry the pending web platform every 5 minutes until it works."""
+        platform = self.state.get("pending_platform")
+        if not platform or platform not in WEB_PLATFORMS:
+            return
+        if not self._chrome_ok():
+            return
+        now = time.time()
+        last = float(self.state.get("last_web_retry") or 0)
+        if now - last < 300:
+            return
+        self.state["last_web_retry"] = now
+        self._save_state()
+        log.info("retrying %s after login prompt", platform)
+        result = self.collect("recent", platform=platform)
+        if result.get("ok"):
+            self.state.pop("pending_platform", None)
+            self.state.pop("pending_state", None)
+            self._save_state()
+
     def _login_watch(self) -> None:
         """Keep prompting for a login until JD accepts the session again."""
+        self._web_login_watch()
         if not config.JD_AUTO_LOGIN or not self._chrome_ok():
             return
         if self._chrome_mode() == "visible":
@@ -349,10 +418,32 @@ class Agent:
     # ------------------------------------------------------------------
     # Collection
     # ------------------------------------------------------------------
-    def collect(self, mode: str = "recent", *, command_id: int | None = None) -> dict[str, Any]:
+    def collect(
+        self,
+        mode: str = "recent",
+        *,
+        command_id: int | None = None,
+        platform: str = "jd",
+    ) -> dict[str, Any]:
+        platform = (platform or "jd").strip().lower()
         mode = normalize_mode(mode)
-        log.info("starting JD collection mode=%s command=%s", mode, command_id)
-        result = collect_jd(mode)
+        log.info("starting %s collection mode=%s command=%s", platform, mode, command_id)
+        if platform == "jd":
+            result = collect_jd(mode)
+        elif platform in WEB_PLATFORMS:
+            result = collect_web(platform, mode)
+        else:
+            result = {"ok": False, "error": "unsupported_platform", "platform": platform}
+
+        if not result.get("ok") and platform in WEB_PLATFORMS:
+            error = str(result.get("error") or "")
+            if error in {"login_required", "captcha", "invalid_page"}:
+                self._ensure_platform_login(platform, error)
+        if result.get("ok") and platform in WEB_PLATFORMS:
+            self.state.pop("pending_platform", None)
+            self.state.pop("pending_state", None)
+            self._save_state()
+
         status = "ok" if result.get("ok") else str(result.get("error") or "error")
         message = json.dumps(result, ensure_ascii=False)[:500]
         try:
@@ -403,7 +494,11 @@ class Agent:
         command = data.get("command")
         if not command:
             return False
-        self.collect(str(command.get("mode") or "recent"), command_id=int(command["id"]))
+        self.collect(
+            str(command.get("mode") or "recent"),
+            command_id=int(command["id"]),
+            platform=str(command.get("platform") or "jd"),
+        )
         return True
 
     # ------------------------------------------------------------------
@@ -445,6 +540,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--sync-only", action="store_true", help="upload local staging rows without collecting")
+    parser.add_argument(
+        "--platform",
+        default="",
+        help="one-off collection: jd, taobao, pdd, douyin, xianyu, zhuanzhuan",
+    )
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.INFO,
@@ -458,6 +558,10 @@ def main() -> int:
         agent.heartbeat()
         agent.sync()
         return 0
+    if args.platform:
+        db.init_db()
+        result = agent.collect("recent", platform=args.platform)
+        return 0 if result.get("ok") else 1
     agent.run(once=args.once)
     return 0
 
