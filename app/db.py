@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS orders (
     image_url TEXT,
     logistics_text TEXT,
     source TEXT NOT NULL DEFAULT '',
+    visitor_visible INTEGER NOT NULL DEFAULT 0,
     raw_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -342,6 +343,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for name in ("image_url", "product_url", "logistics_text", "source"):
         if name not in columns:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {name} TEXT")
+    if "visitor_visible" not in columns:
+        conn.execute(
+            "ALTER TABLE orders ADD COLUMN visitor_visible INTEGER NOT NULL DEFAULT 0"
+        )
     shipment_columns = {row["name"] for row in conn.execute("PRAGMA table_info(shipments)")}
     if "raw_json" not in shipment_columns:
         conn.execute("ALTER TABLE shipments ADD COLUMN raw_json TEXT")
@@ -1207,6 +1212,21 @@ def _search_fallback(
         return []
 
 
+def set_order_visibility(
+    conn: sqlite3.Connection, order_ids: Iterable[int], visible: bool
+) -> int:
+    """Expose or hide orders in the visitor preview. Returns rows updated."""
+    ids = sorted({int(order_id) for order_id in order_ids})
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    cursor = conn.execute(
+        f"UPDATE orders SET visitor_visible=?, updated_at=? WHERE id IN ({placeholders})",
+        [1 if visible else 0, utc_now(), *ids],
+    )
+    return int(cursor.rowcount or 0)
+
+
 def list_orders(
     conn: sqlite3.Connection,
     *,
@@ -1214,6 +1234,7 @@ def list_orders(
     offset: int = 0,
     platform: str | None = None,
     status: str | None = None,
+    visitor_only: bool = False,
 ) -> list[dict[str, Any]]:
     where: list[str] = []
     params: list[Any] = []
@@ -1223,10 +1244,12 @@ def list_orders(
     if status:
         where.append("status = ?")
         params.append(status)
+    if visitor_only:
+        where.append("visitor_visible = 1")
     sql = (
         "SELECT id, platform, platform_order_id, title, shop, amount, status, "
         "status_text, order_time, tracking_no, url, product_url, image_url, "
-        "logistics_text, source, created_at, updated_at, "
+        "logistics_text, source, visitor_visible, created_at, updated_at, "
         "(SELECT COUNT(*) FROM order_shipments os WHERE os.order_id=orders.id) "
         "AS shipment_count FROM orders"
     )

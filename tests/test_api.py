@@ -1,9 +1,12 @@
 import base64
 import gzip
+import hashlib
+import hmac
 import http.client
 import json
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -24,11 +27,15 @@ class ApiTest(unittest.TestCase):
             "MAX_BODY": config.MAX_BODY_BYTES,
             "PASSWORD_HASH": config.PASSWORD_HASH,
             "SESSION_SECRET": config.SESSION_SECRET,
+            "ADMIN_COOKIE_SECRET": config.ADMIN_COOKIE_SECRET,
+            "ADMIN_COOKIE_NAME": config.ADMIN_COOKIE_NAME,
         }
         config.DB_PATH = Path(self.tmp.name) / "test.db"
         config.TOKEN = "testtoken"
         config.PASSWORD_HASH = ""
         config.SESSION_SECRET = ""
+        config.ADMIN_COOKIE_SECRET = ""
+        config.ADMIN_COOKIE_NAME = "zx_admin"
         config.WEB_DIR = ROOT / "web"
         config.MAX_BODY_BYTES = 2 * 1024 * 1024
         db.init_db(config.DB_PATH)
@@ -48,6 +55,8 @@ class ApiTest(unittest.TestCase):
         config.MAX_BODY_BYTES = self.old["MAX_BODY"]
         config.PASSWORD_HASH = self.old["PASSWORD_HASH"]
         config.SESSION_SECRET = self.old["SESSION_SECRET"]
+        config.ADMIN_COOKIE_SECRET = self.old["ADMIN_COOKIE_SECRET"]
+        config.ADMIN_COOKIE_NAME = self.old["ADMIN_COOKIE_NAME"]
         self.tmp.cleanup()
 
     def request(self, method, path, body=None, token=None, content_type="application/json", extra_headers=None):
@@ -71,6 +80,14 @@ class ApiTest(unittest.TestCase):
             payload = raw
         return response.status, payload, dict(response.getheaders())
 
+    @staticmethod
+    def homepage_cookie(secret, expires_ms=None):
+        expiry = int(expires_ms if expires_ms is not None else (time.time() + 3600) * 1000)
+        signature = hmac.new(
+            secret.encode("utf-8"), str(expiry).encode("ascii"), hashlib.sha256
+        ).hexdigest()
+        return f"zx_admin={expiry}.{signature}"
+
     def test_health_config_and_auth(self):
         status, payload, _ = self.request("GET", "/api/health")
         self.assertEqual(status, 200)
@@ -78,11 +95,15 @@ class ApiTest(unittest.TestCase):
         status, payload, _ = self.request("GET", "/api/config")
         self.assertEqual(status, 200)
         self.assertTrue(payload["auth_required"])
+        self.assertEqual(payload["role"], "visitor")
+        self.assertFalse(payload["admin"])
 
-        status, _, _ = self.request("GET", "/api/orders")
-        self.assertEqual(status, 401)
-        status, _, _ = self.request("GET", "/api/orders", token="wrong")
-        self.assertEqual(status, 401)
+        status, payload, _ = self.request("GET", "/api/orders")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["items"], [])
+        status, payload, _ = self.request("GET", "/api/orders", token="wrong")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["items"], [])
         status, payload, _ = self.request("GET", "/api/orders", token="testtoken")
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
@@ -165,7 +186,7 @@ class ApiTest(unittest.TestCase):
         config.SESSION_SECRET = "test-session-secret"
         try:
             status, _, _ = self.request("GET", "/")
-            self.assertEqual(status, 302)
+            self.assertEqual(status, 200)
             status, _, _ = self.request("GET", "/login")
             self.assertEqual(status, 200)
 
@@ -190,6 +211,135 @@ class ApiTest(unittest.TestCase):
         finally:
             config.PASSWORD_HASH = ""
             config.SESSION_SECRET = ""
+
+    def test_visitor_preview_and_homepage_admin(self):
+        secret = "blog-session-secret"
+        config.ADMIN_COOKIE_SECRET = secret
+        with db.session(config.DB_PATH) as conn:
+            first = db.upsert_order(
+                conn,
+                platform="jd",
+                platform_order_id="PREVIEW-1",
+                title="公开预览订单",
+                shop="测试店",
+                amount=99.5,
+                status="shipped",
+                tracking_no="SF1234567890123",
+                logistics_text="北京市朝阳区某小区 13800138000",
+                url="https://example.test/order/1",
+                source="manual",
+            )
+            second = db.upsert_order(
+                conn,
+                platform="taobao",
+                platform_order_id="PREVIEW-2",
+                title="第二条预览订单",
+                amount=12,
+                status="completed",
+            )
+            hidden = db.upsert_order(
+                conn,
+                platform="pdd",
+                platform_order_id="PRIVATE-1",
+                title="未开放订单",
+                amount=7,
+                status="processing",
+            )
+            conn.commit()
+
+        status, payload, _ = self.request("GET", "/api/orders")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["items"], [])
+        self.assertTrue(payload["visitor"])
+
+        status, _, _ = self.request("GET", f"/api/orders/{first}")
+        self.assertEqual(status, 404)
+        status, _, _ = self.request("GET", "/api/stats")
+        self.assertEqual(status, 401)
+
+        status, _, _ = self.request(
+            "POST", "/api/orders/visibility", {"ids": [first], "visible": True}
+        )
+        self.assertEqual(status, 401)
+
+        cookie = self.homepage_cookie(secret)
+        status, payload, _ = self.request(
+            "GET", "/api/config", extra_headers={"Cookie": cookie}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["role"], "admin")
+        self.assertEqual(payload["auth_source"], "homepage")
+
+        status, payload, _ = self.request(
+            "GET", "/api/orders", extra_headers={"Cookie": cookie}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(len(payload["items"]), 3)
+        self.assertTrue(any(item["amount"] == 99.5 for item in payload["items"]))
+
+        status, payload, _ = self.request(
+            "POST",
+            "/api/orders/visibility",
+            {"ids": [first, second], "visible": True},
+            extra_headers={"Cookie": cookie},
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["updated"], 2)
+
+        status, payload, _ = self.request("GET", "/api/orders")
+        self.assertEqual(status, 200)
+        self.assertEqual({item["id"] for item in payload["items"]}, {first, second})
+        for item in payload["items"]:
+            for key in (
+                "amount",
+                "platform_order_id",
+                "tracking_no",
+                "url",
+                "product_url",
+                "logistics_text",
+                "source",
+                "shipments",
+            ):
+                self.assertNotIn(key, item)
+            self.assertTrue(item["visitor_visible"])
+
+        status, payload, _ = self.request("GET", f"/api/orders/{first}")
+        self.assertEqual(status, 200)
+        item = payload["item"]
+        self.assertEqual(item["title"], "公开预览订单")
+        self.assertTrue(item["visitor_view"])
+        self.assertNotIn("tracking_no", item)
+        self.assertNotIn("logistics_text", item)
+        self.assertNotIn("amount", item)
+        status, _, _ = self.request("GET", f"/api/orders/{hidden}")
+        self.assertEqual(status, 404)
+
+        status, payload, _ = self.request(
+            "GET", f"/api/orders/{first}", extra_headers={"Cookie": cookie}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["item"]["tracking_no"], "SF1234567890123")
+        self.assertEqual(payload["item"]["amount"], 99.5)
+
+        status, payload, _ = self.request(
+            "POST",
+            "/api/orders/visibility",
+            {"ids": [first], "visible": False},
+            extra_headers={
+                "Cookie": cookie,
+                "Origin": "https://evil.example",
+            },
+        )
+        self.assertEqual(status, 403)
+        self.assertFalse(payload["ok"])
+
+        expired = self.homepage_cookie(secret, expires_ms=(time.time() - 60) * 1000)
+        status, payload, _ = self.request(
+            "GET", "/api/config", extra_headers={"Cookie": expired}
+        )
+        self.assertEqual(payload["role"], "visitor")
+
+        config.ADMIN_COOKIE_SECRET = ""
 
     def test_collector_queue_and_ingest(self):
         status, _, _ = self.request(

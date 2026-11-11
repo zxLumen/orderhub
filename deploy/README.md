@@ -36,6 +36,7 @@ Set at least:
 - `ORDERHUB_COLLECTOR_TOKEN` (can be the same)
 - `ORDERHUB_PASSWORD_HASH`
 - `ORDERHUB_SESSION_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(48))"`)
+- `ORDERHUB_ADMIN_SECRET`（个人主页 zxLumen-Blog 的 `SESSION_SECRET`；用于共享 `zx_admin` 管理员登录态）
 - `ORDERHUB_COOKIE_SECURE=1`
 - `ENABLE_JD_COLLECTOR=0`
 - `ORDERHUB_VAPID_PUBLIC_KEY` / `ORDERHUB_VAPID_PRIVATE_KEY` (optional Web Push):

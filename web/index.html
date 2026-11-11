@@ -31,19 +31,32 @@
     </header>
 
     <main id="main">
+      <div class="visitor-banner hidden" id="visitorBanner">
+        <div>
+          <strong>访客预览</strong>
+          <span class="muted" id="visitorHint">仅显示管理员开放预览的订单，敏感信息已隐藏。</span>
+        </div>
+        <a class="btn ghost" href="/login">管理员登录</a>
+      </div>
       <section class="view" id="view-recent">
-        <div class="summary-grid" id="summaryGrid"></div>
-        <div class="filter-row" id="recentPlatforms"></div>
+        <div class="summary-grid admin-only" id="summaryGrid"></div>
+        <div class="filter-row admin-only" id="recentPlatforms"></div>
+        <div class="batch-bar admin-only hidden" id="batchBar">
+          <label class="batch-check"><input type="checkbox" id="selectAllOrders"> 全选</label>
+          <span class="muted small" id="selectedCount">已选 0 单</span>
+          <button class="btn mini" id="batchPreviewOn">开放预览</button>
+          <button class="btn ghost mini" id="batchPreviewOff">取消预览</button>
+        </div>
         <div class="section-head">
           <h2>最近订单</h2>
           <span class="muted" id="recentHint"></span>
         </div>
         <div id="recentList" class="list"></div>
-        <div class="section-head spaced">
+        <div class="section-head spaced admin-only">
           <h2>最新动态</h2>
           <span class="muted">短信 · 抓屏</span>
         </div>
-        <div id="recentActivity" class="timeline compact"></div>
+        <div id="recentActivity" class="timeline compact admin-only"></div>
       </section>
 
       <section class="view hidden" id="view-parcels">
@@ -173,15 +186,15 @@
         <svg viewBox="0 0 24 24" fill="none"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
         <span>最近</span>
       </button>
-      <button class="tab" data-tab="parcels">
+      <button class="tab admin-only" data-tab="parcels">
         <svg viewBox="0 0 24 24" fill="none"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3.5 7.7 12 12l8.5-4.3M12 12v9" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
         <span>包裹</span>
       </button>
-      <button class="tab" data-tab="search">
+      <button class="tab admin-only" data-tab="search">
         <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         <span>搜索</span>
       </button>
-      <button class="tab" data-tab="more">
+      <button class="tab admin-only" data-tab="more">
         <svg viewBox="0 0 24 24" fill="none"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg>
         <span>更多</span>
       </button>

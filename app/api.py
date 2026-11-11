@@ -33,7 +33,7 @@ from .services.ingest import (
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
@@ -59,10 +59,40 @@ class ApiError(Exception):
         self.message = message
 
 
+VISITOR_ORDER_FIELDS = (
+    "id",
+    "platform",
+    "title",
+    "shop",
+    "status",
+    "status_text",
+    "order_time",
+    "image_url",
+    "created_at",
+)
+
+
+def _visitor_order(order: dict[str, Any]) -> dict[str, Any]:
+    """Whitelist fields for the public preview.
+
+    Phone numbers, addresses, order/tracking numbers, payment amounts and
+    logistics text are deliberately absent. Shipments are not included at all.
+    """
+    result = {key: order.get(key) for key in VISITOR_ORDER_FIELDS}
+    result["visitor_visible"] = bool(order.get("visitor_visible"))
+    result["visitor_view"] = True
+    return result
+
+
+def _is_order_detail(path: str) -> bool:
+    parts = path.strip("/").split("/")
+    return len(parts) == 3 and parts[:2] == ["api", "orders"] and parts[2].isdigit()
+
+
 def _public_config() -> dict[str, Any]:
     return {
         "version": VERSION,
-        "auth_required": bool(config.TOKEN or config.PASSWORD_HASH),
+        "auth_required": bool(config.TOKEN or config.PASSWORD_HASH or config.ADMIN_COOKIE_SECRET),
         "login_required": bool(config.PASSWORD_HASH),
         "kuaidi100_configured": bool(config.KUAIDI100_CUSTOMER and config.KUAIDI100_KEY),
         "kuaidi100_free": True,
@@ -132,14 +162,20 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, status: int, message: str) -> None:
         self._json(status, {"ok": False, "error": message})
 
-    def _session_value(self) -> str:
+    def _cookie_value(self, name: str) -> str:
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
         except Exception:
             return ""
-        morsel = cookie.get(auth.COOKIE_NAME)
+        morsel = cookie.get(name)
         return morsel.value if morsel else ""
+
+    def _session_value(self) -> str:
+        return self._cookie_value(auth.COOKIE_NAME)
+
+    def _admin_cookie_value(self) -> str:
+        return self._cookie_value(config.ADMIN_COOKIE_NAME) if config.ADMIN_COOKIE_NAME else ""
 
     def _bearer_token(self) -> str:
         header = self.headers.get("Authorization", "")
@@ -157,24 +193,48 @@ class Handler(BaseHTTPRequestHandler):
             and auth.verify_session(config.SESSION_SECRET, self._session_value())
         )
 
-    def _authenticated(self) -> bool:
-        if not config.TOKEN and not config.PASSWORD_HASH:
-            return True
+    def _homepage_admin_authenticated(self) -> bool:
+        return bool(
+            config.ADMIN_COOKIE_SECRET
+            and auth.verify_admin_cookie(
+                config.ADMIN_COOKIE_SECRET, self._admin_cookie_value()
+            )
+        )
+
+    def _auth_identity(self) -> tuple[str, str]:
+        """Return (role, source). No auth configured means the owner runs it."""
+        if not config.TOKEN and not config.PASSWORD_HASH and not config.ADMIN_COOKIE_SECRET:
+            return "admin", "none"
         token = self._bearer_token()
         if config.TOKEN and token and hmac.compare_digest(token, config.TOKEN):
-            return True
-        return self._session_authenticated()
+            return "admin", "token"
+        if self._session_authenticated():
+            return "admin", "session"
+        if self._homepage_admin_authenticated():
+            return "admin", "homepage"
+        return "visitor", "visitor"
+
+    def _authenticated(self) -> bool:
+        return self._auth_identity()[0] == "admin"
 
     def _check_auth(self, path: str) -> str:
-        if not config.TOKEN and not config.PASSWORD_HASH:
-            return "none"
+        """Guard write/admin endpoints; returns the auth source."""
         if path in {"/api/health", "/api/config", "/api/session", "/api/login", "/api/logout"}:
             return "none"
-        token = self._bearer_token()
-        if config.TOKEN and token and hmac.compare_digest(token, config.TOKEN):
-            return "token"
-        if self._session_authenticated():
-            return "session"
+        role, source = self._auth_identity()
+        if role == "admin":
+            return source
+        raise ApiError(HTTPStatus.UNAUTHORIZED, "unauthorized")
+
+    def _check_read(self, path: str) -> str:
+        """Guard reads. Visitors may only read order previews."""
+        if path in {"/api/health", "/api/config", "/api/session", "/api/login", "/api/logout"}:
+            return "none"
+        role, source = self._auth_identity()
+        if role == "admin":
+            return source
+        if path == "/api/orders" or _is_order_detail(path):
+            return source
         raise ApiError(HTTPStatus.UNAUTHORIZED, "unauthorized")
 
     def _set_session_cookie(self, value: str, max_age: int) -> None:
@@ -246,18 +306,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.unquote(parsed.path)
         try:
             if path.startswith("/api/"):
-                self._check_auth(path)
+                self._check_read(path)
                 self._get_api(path, urllib.parse.parse_qs(parsed.query))
                 return
-            if config.PASSWORD_HASH and not self._session_authenticated():
-                public = (
-                    path in {"/login", "/login.html", "/login.js", "/styles.css"}
-                    or path.startswith("/icons/")
-                    or path in {"/manifest.webmanifest", "/sw.js", "/app.js"}
-                )
-                if not public:
-                    self._redirect("/login?next=" + urllib.parse.quote(path or "/"))
-                    return
+            # The app shell is public so visitors can see the preview list. The
+            # API enforces the role for every data endpoint.
             self._serve_static(path)
         except ApiError as exc:
             self._error(exc.status, exc.message)
@@ -281,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b"{}")
                 return
             mode = self._check_auth(path)
-            if mode == "session" and not self._csrf_ok():
+            if mode in {"session", "homepage"} and not self._csrf_ok():
                 raise ApiError(HTTPStatus.FORBIDDEN, "origin mismatch")
             payload = self._read_json()
             self._post_api(path, payload, urllib.parse.parse_qs(parsed.query))
@@ -315,6 +368,8 @@ class Handler(BaseHTTPRequestHandler):
     # API
     # ------------------------------------------------------------------
     def _get_api(self, path: str, query: dict[str, list[str]]) -> None:
+        role, source = self._auth_identity()
+        is_admin = role == "admin"
         if path == "/api/health":
             self._json(
                 HTTPStatus.OK,
@@ -323,7 +378,9 @@ class Handler(BaseHTTPRequestHandler):
                     "api_version": 1,
                     "version": VERSION,
                     "time": utc_now(),
-                    "auth_required": bool(config.TOKEN or config.PASSWORD_HASH),
+                    "auth_required": bool(
+                        config.TOKEN or config.PASSWORD_HASH or config.ADMIN_COOKIE_SECRET
+                    ),
                     "login_required": bool(config.PASSWORD_HASH),
                 },
             )
@@ -333,13 +390,25 @@ class Handler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "ok": True,
-                    "authenticated": self._authenticated(),
+                    "authenticated": is_admin,
+                    "role": role,
+                    "auth_source": source,
                     "login_required": bool(config.PASSWORD_HASH),
                 },
             )
             return
         if path == "/api/config":
-            self._json(HTTPStatus.OK, {"ok": True, **_public_config()})
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    **_public_config(),
+                    "role": role,
+                    "auth_source": source,
+                    "admin": is_admin,
+                    "visitor_preview": True,
+                },
+            )
             return
         if path == "/api/push/public-key":
             self._json(
@@ -348,29 +417,39 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        order_read = path == "/api/orders" or _is_order_detail(path)
+        if not is_admin and not order_read:
+            raise ApiError(HTTPStatus.UNAUTHORIZED, "unauthorized")
+
         with session() as conn:
-            if path.startswith("/api/orders/"):
+            if _is_order_detail(path):
                 try:
                     order_id = int(path.rsplit("/", 1)[-1])
                 except ValueError:
                     raise ApiError(HTTPStatus.BAD_REQUEST, "invalid order id")
                 order = db.get_order(conn, order_id)
-                if order is None:
+                if order is None or (not is_admin and not order.get("visitor_visible")):
                     raise ApiError(HTTPStatus.NOT_FOUND, "order not found")
-                self._json(HTTPStatus.OK, {"ok": True, "item": order})
-            elif path == "/api/orders":
+                if not is_admin:
+                    order = _visitor_order(order)
                 self._json(
                     HTTPStatus.OK,
-                    {
-                        "ok": True,
-                        "items": db.list_orders(
-                            conn,
-                            limit=_int(query, "limit", 50),
-                            offset=_int(query, "offset", 0),
-                            platform=_str(query, "platform"),
-                            status=_str(query, "status"),
-                        ),
-                    },
+                    {"ok": True, "item": order, "visitor": not is_admin},
+                )
+            elif path == "/api/orders":
+                items = db.list_orders(
+                    conn,
+                    limit=_int(query, "limit", 50),
+                    offset=_int(query, "offset", 0),
+                    platform=_str(query, "platform"),
+                    status=_str(query, "status"),
+                    visitor_only=not is_admin,
+                )
+                if not is_admin:
+                    items = [_visitor_order(item) for item in items]
+                self._json(
+                    HTTPStatus.OK,
+                    {"ok": True, "items": items, "visitor": not is_admin},
                 )
             elif path == "/api/shipments":
                 self._json(
@@ -521,6 +600,28 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 conn.commit()
             self._json(HTTPStatus.OK, {"ok": True, **result})
+            return
+
+        if path == "/api/orders/visibility":
+            raw_ids = payload.get("ids")
+            if raw_ids is None and payload.get("id") is not None:
+                raw_ids = [payload.get("id")]
+            if not isinstance(raw_ids, list) or not raw_ids:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "ids[] is required")
+            if len(raw_ids) > 500:
+                raise ApiError(HTTPStatus.BAD_REQUEST, "too many ids")
+            try:
+                order_ids = [int(value) for value in raw_ids]
+            except (TypeError, ValueError):
+                raise ApiError(HTTPStatus.BAD_REQUEST, "ids must be integers")
+            visible = bool(payload.get("visible"))
+            with session() as conn:
+                updated = db.set_order_visibility(conn, order_ids, visible)
+                conn.commit()
+            self._json(
+                HTTPStatus.OK,
+                {"ok": True, "updated": updated, "visible": visible},
+            )
             return
 
         if path == "/api/orders":

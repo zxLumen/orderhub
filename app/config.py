@@ -66,6 +66,13 @@ COOKIE_SECURE = _bool("ORDERHUB_COOKIE_SECURE", False)
 LOGIN_RATE_LIMIT = int(os.environ.get("ORDERHUB_LOGIN_RATE_LIMIT", "8"))
 LOGIN_RATE_WINDOW = int(os.environ.get("ORDERHUB_LOGIN_RATE_WINDOW", "900"))
 
+# Admin session shared by the personal homepage (zxLumen-Blog). The blog writes
+# an HttpOnly `zx_admin` cookie signed with its SESSION_SECRET; OrderHub only
+# verifies that cookie, it never issues it. Set ORDERHUB_ADMIN_SECRET to the
+# same value as the blog's SESSION_SECRET.
+ADMIN_COOKIE_NAME = os.environ.get("ORDERHUB_ADMIN_COOKIE", "zx_admin").strip() or "zx_admin"
+ADMIN_COOKIE_SECRET = os.environ.get("ORDERHUB_ADMIN_SECRET", "").strip()
+
 # Remote collector mode (Windows agent -> this server)
 SERVER_URL = os.environ.get("ORDERHUB_SERVER_URL", "").strip().rstrip("/")
 COLLECTOR_TOKEN = os.environ.get("ORDERHUB_COLLECTOR_TOKEN", "").strip() or TOKEN

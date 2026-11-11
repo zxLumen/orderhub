@@ -29,6 +29,8 @@
     token: localStorage.getItem("orderhub_token") || "",
     tab: "recent",
     config: null,
+    isAdmin: false,
+    selectedOrders: new Set(),
     stats: null,
     platforms: [],
     orders: [],
@@ -131,13 +133,13 @@
       throw new Error("网络不可用，检查 Tailscale 或后端是否启动");
     }
     if (response.status === 401) {
-      if (state.config?.login_required) {
+      if (state.isAdmin && state.config?.login_required) {
         const next = encodeURIComponent(location.pathname + location.search);
         location.replace(`/login?next=${next}`);
         throw new Error("需要登录");
       }
-      showTokenModal();
-      throw new Error("需要访问令牌");
+      if (state.isAdmin) showTokenModal();
+      throw new Error("需要管理员权限");
     }
     let data = null;
     try {
@@ -157,7 +159,13 @@
   async function loadConfig() {
     try {
       state.config = await api("/api/config");
-      if (state.config.auth_required && !state.config.login_required && !state.token) {
+      state.isAdmin = state.config.admin === true;
+      document.body.classList.toggle("visitor-mode", !state.isAdmin);
+      const banner = $("#visitorBanner");
+      if (banner) banner.classList.toggle("hidden", state.isAdmin);
+      const batch = $("#batchBar");
+      if (batch) batch.classList.toggle("hidden", !state.isAdmin);
+      if (state.isAdmin && state.config.auth_required && !state.config.login_required && !state.token) {
         showTokenModal();
       }
     } catch (error) {
@@ -171,6 +179,19 @@
     const refreshBtn = $("#refreshBtn");
     if (!silent) refreshBtn.classList.add("spinning");
     try {
+      if (!state.isAdmin) {
+        const orders = await api("/api/orders?limit=50");
+        state.orders = orders.items || [];
+        state.stats = { orders: state.orders.length };
+        state.platforms = [];
+        state.shipments = [];
+        state.sms = [];
+        state.captures = [];
+        state.alerts = [];
+        state.collector = null;
+        renderVisitor();
+        return;
+      }
       const [stats, orders, parcels, sms, captures, alerts, collector, platforms] = await Promise.all([
         api("/api/stats"),
         api(`/api/orders?limit=${state.orderLimit}` + (state.recentPlatform ? `&platform=${encodeURIComponent(state.recentPlatform)}` : "")),
@@ -197,6 +218,48 @@
       state.loading = false;
       refreshBtn.classList.remove("spinning");
     }
+  }
+
+  function renderVisitor() {
+    const count = state.orders.length;
+    $("#brandSub").textContent = `访客预览 · ${count} 单`;
+    $("#recentHint").textContent = count ? `共 ${count} 单开放预览` : "暂时没有开放预览的订单";
+    const hint = $("#visitorHint");
+    if (hint) hint.textContent = count
+      ? "仅显示管理员开放预览的订单，敏感信息已隐藏。"
+      : "管理员暂未开放任何订单预览。";
+    renderRecent();
+  }
+
+  async function setOrderVisibility(ids, visible) {
+    const clean = [...new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+    if (!clean.length) { toast("先选择订单"); return; }
+    try {
+      const result = await api("/api/orders/visibility", {
+        method: "POST",
+        body: JSON.stringify({ ids: clean, visible }),
+      });
+      state.selectedOrders.clear();
+      toast(`${visible ? "已开放" : "已取消"}预览 ${result.updated || 0} 单`);
+      await loadDashboard({ silent: true });
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  function updateSelection() {
+    const count = state.selectedOrders.size;
+    const label = $("#selectedCount");
+    if (label) label.textContent = `已选 ${count} 单`;
+    const all = $("#selectAllOrders");
+    if (all) {
+      const visible = (state.orders || []).length;
+      all.checked = visible > 0 && count === visible;
+      all.indeterminate = count > 0 && count < visible;
+    }
+    $$(".preview-check input", $("#recentList")).forEach((node) => {
+      node.checked = state.selectedOrders.has(Number(node.value));
+    });
   }
 
   function renderAll() {
@@ -238,14 +301,15 @@
 
   function orderCard(order) {
     const title = order.title || "(无商品名)";
-    const sub = [
+    const sub = state.isAdmin ? [
       order.shop,
       order.tracking_no ? `运单 ${order.tracking_no}` : "",
       Number(order.shipment_count) > 1 ? `${order.shipment_count} 个包裹` : "",
-    ].filter(Boolean).join(" · ");
+    ].filter(Boolean).join(" · ") : (order.shop || "");
     const status = statusBadge(order.status, order.status_text);
-    const amount = order.amount != null ? `<span class="card-amount">${esc(money(order.amount))}</span>` : "";
-    return `
+    const amount = state.isAdmin && order.amount != null
+      ? `<span class="card-amount">${esc(money(order.amount))}</span>` : "";
+    const card = `
       <button type="button" class="card" data-order-id="${esc(order.id)}">
         ${thumbHtml(order)}
         <div class="card-main">
@@ -255,6 +319,18 @@
           <div class="card-bottom">${amount}<span class="card-time">${esc(order.order_time ? timeText(order.order_time) : "")}</span></div>
         </div>
       </button>`;
+    if (!state.isAdmin) return card;
+    const visible = Boolean(order.visitor_visible);
+    return `
+      <div class="order-row">
+        <div class="order-tools">
+          <label class="preview-check" title="选择订单">
+            <input type="checkbox" class="order-select" value="${esc(order.id)}"${state.selectedOrders.has(Number(order.id)) ? " checked" : ""}>
+          </label>
+          <button type="button" class="mini-btn preview-toggle${visible ? " on" : ""}" data-preview-toggle="${esc(order.id)}" title="${visible ? "访客当前可见，点击取消" : "开放给访客预览"}">${visible ? "预览中" : "开放预览"}</button>
+        </div>
+        ${card}
+      </div>`;
   }
 
   function platformLabel(key) {
@@ -374,11 +450,13 @@
         String(b.order_time || b.created_at || "").localeCompare(String(a.order_time || a.created_at || ""))
       );
     if (!orders.length) {
-      list.innerHTML = empty(
-        state.recentPlatform ? `没有${platformLabel(state.recentPlatform)}订单` : "还没有订单",
-        state.recentPlatform ? "换一个平台，或去「更多 → 导入订单」补历史。" : "短信、账单导入和京东采集会慢慢把订单补进来。"
-      );
-      $("#recentHint").textContent = "";
+      list.innerHTML = state.isAdmin
+        ? empty(
+            state.recentPlatform ? `没有${platformLabel(state.recentPlatform)}订单` : "还没有订单",
+            state.recentPlatform ? "换一个平台，或去「更多 → 导入订单」补历史。" : "短信、账单导入和京东采集会慢慢把订单补进来。"
+          )
+        : empty("暂无开放预览", "管理员开放订单预览后，这里会显示商品、平台和状态。");
+      $("#recentHint").textContent = state.isAdmin ? "" : "访客视图";
       return;
     }
     list.innerHTML = orders.map(orderCard).join("");
@@ -388,6 +466,25 @@
         if (order) openOrderSheet(order);
       });
     });
+    if (state.isAdmin) {
+      $$(".order-select", list).forEach((node) => {
+        node.addEventListener("change", () => {
+          const id = Number(node.value);
+          if (node.checked) state.selectedOrders.add(id);
+          else state.selectedOrders.delete(id);
+          updateSelection();
+        });
+      });
+      $$("[data-preview-toggle]", list).forEach((node) => {
+        node.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const id = Number(node.dataset.previewToggle);
+          const order = orders.find((item) => Number(item.id) === id);
+          setOrderVisibility([id], !(order && order.visitor_visible));
+        });
+      });
+      updateSelection();
+    }
     const current = (state.platforms || []).find((item) => item.id === state.recentPlatform);
     const total = state.recentPlatform
       ? (current ? current.orders || 0 : orders.length)
@@ -651,6 +748,23 @@
   }
 
   async function openOrderSheet(order) {
+    if (!state.isAdmin) {
+      openSheet(`
+        <div class="order-head">
+          ${thumbHtml(order)}
+          <div>
+            <h2>${esc(order.title || "(无商品名)")}</h2>
+            <div class="card-top">${platformBadge(order.platform)}${statusBadge(order.status, order.status_text)}</div>
+          </div>
+        </div>
+        ${kv([
+          ["店铺", esc(order.shop || "")],
+          ["下单时间", esc(timeText(order.order_time))],
+        ])}
+        <div class="visitor-note">访客预览会隐藏手机号、地址、订单/运单号、支付金额和物流轨迹等敏感信息。</div>
+      `);
+      return;
+    }
     const raw = parseRaw(order);
     const facts = orderFacts(order, raw);
     const links = [];
@@ -679,6 +793,7 @@
         ["订单号", esc(order.platform_order_id || "")],
         ["运单号", esc(order.tracking_no || "")],
         ["物流", facts.logistics ? `<span class="logistics">${esc(facts.logistics)}</span>` : ""],
+        ["访客预览", order.visitor_visible ? "已开放" : "仅管理员可见"],
         ["链接", links.join(" · ")],
       ])}
       <div id="orderShipments"><div class="muted small" style="margin-top:14px">加载包裹物流…</div></div>
@@ -1157,6 +1272,15 @@
     $("#sheetBackdrop").addEventListener("click", closeSheet);
     document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeSheet(); });
 
+    $("#selectAllOrders").addEventListener("change", (event) => {
+      const checked = event.target.checked;
+      state.selectedOrders.clear();
+      if (checked) (state.orders || []).forEach((order) => state.selectedOrders.add(Number(order.id)));
+      updateSelection();
+    });
+    $("#batchPreviewOn").addEventListener("click", () => setOrderVisibility([...state.selectedOrders], true));
+    $("#batchPreviewOff").addEventListener("click", () => setOrderVisibility([...state.selectedOrders], false));
+
     $("#pollParcelsBtn").addEventListener("click", pollParcels);
     $("#importBtn").addEventListener("click", () => $("#importFile").click());
     $("#importFile").addEventListener("change", (event) => {
@@ -1197,7 +1321,9 @@
     $("#recentList").innerHTML = `<div class="skeleton"></div><div class="skeleton" style="margin-top:10px"></div>`;
     $("#parcelList").innerHTML = `<div class="skeleton"></div>`;
     await loadConfig();
-    if (state.config?.auth_required && !state.token) {
+    if (state.isAdmin) {
+      await loadDashboard();
+    } else if (state.config?.auth_required && !state.config.login_required && !state.token) {
       showTokenModal();
     } else {
       await loadDashboard();

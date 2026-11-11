@@ -91,3 +91,26 @@ def verify_session(secret: str, value: str) -> bool:
         return int(data.get("exp", 0)) >= int(time.time())
     except (ValueError, TypeError, json.JSONDecodeError):
         return False
+
+
+def verify_admin_cookie(secret: str, value: str) -> bool:
+    """Verify the personal homepage's stateless `zx_admin` cookie.
+
+    The blog signs `<expiry_ms>.<hex hmac_sha256(expiry_ms)>` with its
+    SESSION_SECRET. OrderHub shares the secret but does not mint the cookie.
+    """
+    if not secret or not value:
+        return False
+    expiry, dot, signature = value.partition(".")
+    if not dot or not expiry or not signature:
+        return False
+    try:
+        expires_ms = int(expiry)
+    except ValueError:
+        return False
+    if expires_ms < int(time.time() * 1000):
+        return False
+    expected = hmac.new(
+        secret.encode("utf-8"), expiry.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(signature, expected)

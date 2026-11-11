@@ -624,3 +624,71 @@ textarea#smsBulkInput:focus { border-color: var(--brand); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* Visitor preview / admin tools */
+body.visitor-mode .admin-only { display: none !important; }
+body.visitor-mode .summary-grid,
+body.visitor-mode .section-head.spaced { display: none !important; }
+.visitor-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 14px;
+  padding: 13px 15px;
+  border: 1px solid var(--brand-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.visitor-banner strong { color: var(--brand); margin-right: 6px; }
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin: 4px 0 10px;
+  padding: 9px 11px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+}
+.batch-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.batch-check input, .preview-check input { accent-color: var(--brand); width: 16px; height: 16px; }
+.btn.mini { height: 32px; padding: 0 12px; font-size: 12.5px; }
+.order-row { display: flex; align-items: stretch; gap: 8px; }
+.order-row .card { flex: 1; min-width: 0; }
+.order-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 58px;
+  flex: 0 0 58px;
+}
+.preview-check {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-elev);
+}
+.preview-toggle {
+  width: 58px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+.preview-toggle.on { color: var(--green); border-color: var(--green); background: var(--green-soft); }
+.visitor-note {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--muted);
+  font-size: 12.5px;
+}

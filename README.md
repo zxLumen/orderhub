@@ -40,6 +40,7 @@
 - 平台覆盖面板：`GET /api/platforms`，按平台展示订单数、包裹数、最后下单时间、可用通道
 - 免 key 物流查询：快递100 公开 Web 接口，非京东运单也能查轨迹（`app/services/kuaidi_web.py`）
 - 批量短信 / 补物流：`POST /api/sms/bulk`、`POST /api/tracking/query`
+- 访客预览：管理员登录态（个人主页 `/admin` 的 `zx_admin` cookie）可看全部订单；访客默认只看管理员逐条/批量开放的订单，且响应里不返回手机号、地址、订单/运单号、金额和物流轨迹
 
 ## 还没做（下一步）
 
@@ -403,18 +404,22 @@ python scripts\import_orders.py orders.csv --platform taobao
 
 ## API 速查
 
-所有 `/api/*`（除 `/api/health`、`/api/config`）都需要：
+`/api/health`、`/api/config`、`/api/session` 公开；订单只读接口允许访客，但只返回已开放预览的脱敏订单。其余 `/api/*` 需要管理员身份：
 
 ```
 Authorization: Bearer <ORDERHUB_TOKEN>
+Cookie: zx_admin=<个人主页管理员会话>
 ```
+
+管理员也可继续用 OrderHub 自己的密码登录（`orderhub_session`）。访客无需登录，但只能看预览；写接口一律拒绝访客。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/health` | 健康检查 |
-| GET | `/api/config` | 公开配置（不含密钥） |
-| GET | `/api/orders` | 订单列表 |
+| GET | `/api/config` | 公开配置（不含密钥，含当前角色） |
+| GET | `/api/orders` | 订单列表（访客自动过滤 + 脱敏） |
 | POST | `/api/orders` | 新增/更新订单 |
+| POST | `/api/orders/visibility` | 逐条/批量开放或取消访客预览 |
 | POST | `/api/orders/import` | 批量导入 |
 | GET | `/api/shipments` | 包裹列表 |
 | GET | `/api/shipments/{no}` | 包裹详情 + 轨迹 |

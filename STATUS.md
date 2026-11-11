@@ -1,8 +1,8 @@
 # OrderHub 状态
 
-- 版本：0.4.0（2026-11-11）
+- 版本：0.5.0（2026-11-12）
 - 线上：https://orderhub.zxlumen.cn（systemd `orderhub`，`/opt/orderhub`，数据 `/var/lib/orderhub/orderhub.db`）
-- 测试：109 pass / 0 fail
+- 测试：118 pass / 0 fail
 - 当前生产数据：1386 单（全部京东）、39 个包裹、201 条轨迹
 
 ## 本版新增
@@ -13,6 +13,7 @@
 - 登录失效时 agent 切可见 Chrome 并打开登录页，5 分钟自动重试
 - 导入：支付宝 ZIP/CSV、微信 CSV、平台个人信息副本 CSV/XLSX/JSON/ZIP，幂等
 - UI：平台筛选、平台覆盖面板（含「采集」按钮）、导入面板、补物流、批量短信
+- 访客预览：个人主页管理员 `zx_admin` 登录态鉴权；访客默认只看管理员逐条/批量开放的订单，接口层强制脱敏（不返回订单/运单号、金额、物流、手机号/地址）
 - 物流：无付费 key 时走快递100 公开查询（手动补单，默认不自动轮询）
 - 数据：`orders.source` 记录来源（agent/alipay/wechat/export/manual），旧库自动迁移
 
