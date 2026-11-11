@@ -252,7 +252,9 @@ def _cookie_header(cookies: dict[str, str]) -> str:
     return "; ".join(f"{name}={value}" for name, value in cookies.items() if value)
 
 
-def fetch_page(page: int, *, tab: int = 0, cookies: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_page(page: int, *, tab: str = "all", cookies: dict[str, str]) -> list[dict[str, Any]]:
+    # Douyin's H5 order list is zero-based: page=0 is the newest page. Starting
+    # at page=1 silently drops the ten newest orders.
     query = urllib.parse.urlencode({"tab": tab, "page": page, **APP_PARAMS})
     request = urllib.request.Request(
         f"{API}?{query}",
@@ -412,8 +414,8 @@ def collect_douyin(mode: str = "recent", *, max_pages: int = 50) -> dict[str, An
 
 def _fetch_all(cookies: dict[str, str], max_pages: int) -> list[list[dict[str, Any]]]:
     batches: list[list[dict[str, Any]]] = []
-    for page in range(1, max_pages + 1):
-        batch = fetch_page(page, tab=0, cookies=cookies)
+    for page in range(0, max_pages):
+        batch = fetch_page(page, tab="all", cookies=cookies)
         if not batch:
             break
         batches.append(batch)
