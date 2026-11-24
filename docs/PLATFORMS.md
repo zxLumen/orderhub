@@ -10,7 +10,7 @@ OrderHub 0.3 不再只覆盖京东。每个平台按「能拿到真实数据的�
 | 淘宝/天猫 | Windows Chrome 采集（新增）、个人信息副本、支付宝/微信账单、短信 | 运单号（导出/短信）→ 快递100 | 采集器已上线，登录后可用 |
 | 拼多多 | Windows Chrome 采集（新增）、个人信息副本、微信/支付宝账单、短信 | 同上 | 采集器已上线，登录后可用 |
 | 闲鱼 | Windows Chrome 采集（新增）、个人信息副本、支付宝账单、短信 | 同上 | 采集器已上线，登录后可用 |
-| 抖音 | 个人信息副本、支付宝/微信账单、短信 | 同上 | 网页版无消费者订单页（实测），只能导入 |
+| 抖音 | Windows agent（模拟器 App 会话 + 订单 JSON 接口）、个人信息副本、支付宝/微信账单、短信 | 同上 | 已上线；网页登录无效，只能走 App 会话 |
 | 转转 | Windows Chrome 采集（实验）、个人信息副本、支付宝/微信账单、短信 | 同上 | 网页订单入口不稳定，需 URL 覆盖或导入 |
 | 美团 / 饿了么 | 支付宝/微信账单、短信 | 配送短信状态（无运单） | 已上线 |
 | 唯品会 / 小红书 | 账单、短信 | 运单号 → 快递100 | 已上线（低频） |
@@ -64,26 +64,25 @@ Windows 上的 `app.collector_agent` 除了京东，还能采集淘宝、拼多�
    ```
 3. 采集器打开订单页，先嗅探页面自己加载的 JSON，再退回页面文本解析；只写解析到订单号的行。
 
-实测（2026-11-11，未登录状态）：淘宝 → `login.taobao.com`、拼多多 → `/login.html`、闲鱼 → `passport.goofish.com`，三者都能正确识别为「需要登录」。抖音、转转没有稳定的公开网页订单入口：抖音首页只有「我的」，转转 PC 首页只有下载 App；这两个平台默认从首页尝试点「商城/我的订单」，失败会报 `invalid_page`。
+实测（2026-11-11，未登录状态）：淘宝 → `login.taobao.com`、拼多多 → `/login.html`、闲鱼 → `passport.goofish.com`，三者都能正确识别为「需要登录」。抖音不走网页，订单接口只认模拟器里 App 的会话（`ec.snssdk.com/order/page`），登录过期时 agent 会自动启动 MuMu 并打开抖音 App，登录后自动更新 Win 侧凭证。转转没有稳定的公开网页订单入口，默认从首页尝试点「商城/我的订单」，失败会报 `invalid_page`。
 
-抖音/转转如果找不到订单页，用登录后 Chrome 里复制到的真实地址覆盖：
+转转如果找不到订单页，用登录后 Chrome 里复制到的真实地址覆盖：
 
 ```ini
-ORDERHUB_URL_DOUYIN=https://...
 ORDERHUB_URL_ZHUANZHUAN=https://...
 ```
 
-采集器状态会写进「采集记录」：`ok / empty / login_required / captcha / invalid_page / error`。`login_required` 或 `captcha` 时，agent 会把 Chrome 切成可见窗口并打开登录页；登录后点重试，或等它 5 分钟后自动重试。
+采集器状态会写进「采集记录」：`ok / empty / login_required / captcha / invalid_page / error`。网页平台在 `login_required` 或 `captcha` 时，agent 会把 Chrome 切成可见窗口并打开登录页；抖音则自动打开模拟器和 App，登录后自动重试。
 
-风险：平台可能弹验证码、限流或改版；不做任何绕过，失败就停下来等人工。所有抓取都在你自己的 Chrome 里，服务端不保存平台 cookie。
+风险：平台可能弹验证码、限流或改版；不做任何绕过，失败就停下来等人工。网页平台在自己 Chrome 里抓取，抖音只读模拟器 App 的 WebView 会话；服务端不保存平台 cookie。
 
 ## 明确没做
 
-- 免登录抓取：这些平台订单页必须登录，采集器只使用你自己 Chrome 的登录态，不做绕过。
-- 抖音/转转的网页订单页不存在或长期不稳定（抖音实测：/user/self 无订单入口、/shop 404、haohuo H5 需要 App 内 token）；走个人信息副本/账单导入。
+- 免登录抓取：这些平台订单页必须登录，采集器只使用你自己的登录态（网页平台用 Chrome，抖音用模拟器 App），不做绕过。
+- 抖音网页订单页不存在（实测：/user/self 无订单入口、/shop 404、haohuo H5 需要 App 内 token）；抖音改走模拟器 App 会话 + 订单 JSON 接口。转转网页入口不稳定，可用个人信息副本/账单导入。
 - 自动读取 iPhone 短信：需要 iOS 快捷指令把短信 POST 到 `/api/sms`（或批量粘贴），仓库不申请短信权限。
 - 账单自动定时拉取：支付宝/微信都不提供个人账单 API，只能人工下载后导入。
-- 平台登录态 / cookie：OrderHub 不保存任何平台 cookie。
+- 平台登录态 / cookie：服务端不保存任何平台 cookie；抖音会话只保存在 Windows 本机的 `C:\OrderHub\data\douyin-cookies.json`。
 
 ## 回滚
 
