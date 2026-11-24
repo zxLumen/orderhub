@@ -254,6 +254,9 @@ class Agent:
         """On login/captcha, surface a visible Chrome and open the login page."""
         if platform not in WEB_PLATFORMS:
             return
+        if platform == "douyin":
+            # The web login is not a valid order session; see collect().
+            return
         self.state["pending_platform"] = platform
         self.state["pending_state"] = state
         # Do not retry immediately: give the user time to log in.
@@ -274,6 +277,12 @@ class Agent:
     def _web_login_watch(self) -> None:
         """Retry the pending web platform every 5 minutes until it works."""
         platform = self.state.get("pending_platform")
+        if platform == "douyin":
+            # Never re-open the browser login loop for Douyin; see collect().
+            self.state.pop("pending_platform", None)
+            self.state.pop("pending_state", None)
+            self._save_state()
+            return
         if not platform or platform not in WEB_PLATFORMS:
             return
         if not self._chrome_ok():
@@ -452,7 +461,20 @@ class Agent:
 
         if not result.get("ok") and platform in WEB_PLATFORMS:
             error = str(result.get("error") or "")
-            if error in {"login_required", "captcha", "invalid_page"}:
+            if platform == "douyin":
+                # Douyin's order API only accepts the App-issued session. A
+                # browser login (douyin.com or the jinritemai SSO page) is
+                # rejected with 10001010A, so opening the web login every five
+                # minutes can never fix it: it just loops the QR prompt.
+                self.state.pop("pending_platform", None)
+                self.state.pop("pending_state", None)
+                self.state["last_douyin_auth_fail"] = time.time()
+                self._save_state()
+                log.warning(
+                    "douyin auth failed (%s); the web login cannot provide a valid order session",
+                    error,
+                )
+            elif error in {"login_required", "captcha", "invalid_page"}:
                 self._ensure_platform_login(platform, error)
         if result.get("ok") and platform in WEB_PLATFORMS:
             self.state.pop("pending_platform", None)
