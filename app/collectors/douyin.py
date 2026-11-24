@@ -69,10 +69,22 @@ COOKIE_NAMES = (
     "uid_tt_ss",
     "odin_tt",
     "passport_csrf_token",
+    "passport_csrf_token_default",
+    "passport_assist_user",
+    # TicketGuard session tag: required by the order API; without it every
+    # request is answered with 10001010A even for a logged-in App session.
+    "session_tlb_tag",
+    "multi_sids",
+    "n_mh",
+    "has_biz_token",
+    "is_staff_user",
+    "store-region",
+    "store-region-src",
     "ttwid",
 )
 
 COOKIE_FILE = config.DATA_DIR / "douyin-cookies.json"
+GOOD_COOKIE_FILE = config.DATA_DIR / "douyin-cookies.good.json"
 
 COOKIE_DB = "/data/data/com.ss.android.ugc.aweme/app_webview/Default/Cookies"
 ADB_SERIAL = os.environ.get("ORDERHUB_ADB_SERIAL", "127.0.0.1:16384").strip()
@@ -165,8 +177,9 @@ def refresh_cookies_from_emulator() -> dict[str, str]:
     if not cookies.get("sessionid"):
         raise DouyinAuthError("douyin_sessionid_missing")
 
-    _save_cookies(cookies)
-    log.info("refreshed Douyin cookies from emulator (%s keys)", len(cookies))
+    # Do not persist yet: refresh_cookies() validates the session first so a
+    # rejected session can never overwrite a working cookie file.
+    log.info("read Douyin cookies from emulator (%s keys)", len(cookies))
     return cookies
 
 
@@ -197,30 +210,41 @@ def refresh_cookies_from_chrome() -> dict[str, str]:
         raise DouyinAuthError("douyin_not_logged_in_chrome")
     picked = {name: value for name, value in picked.items() if value}
 
-    _save_cookies(picked)
-    log.info("refreshed Douyin cookies from Chrome (%s keys)", len(picked))
+    # Chrome web logins are rejected by the order API; never persist them.
+    log.info("read Douyin cookies from Chrome (%s keys, not saved)", len(picked))
     return picked
 
 
 def refresh_cookies() -> dict[str, str]:
-    """Chrome first (no emulator needed), rooted emulator as a fallback."""
-    errors: list[str] = []
-    for label, refresh in (
-        ("chrome", refresh_cookies_from_chrome),
-        ("emulator", refresh_cookies_from_emulator),
-    ):
-        try:
-            return refresh()
-        except Exception as exc:
-            errors.append(f"{label}: {exc}")
-            log.warning("cookie refresh via %s failed: %s", label, exc)
-    raise DouyinAuthError("douyin_login_required (" + "; ".join(errors) + ")")
+    """Read the App session from the rooted emulator and validate it.
+
+    The order API only accepts the App-issued session. Browser logins are
+    rejected with 10001010A, so Chrome is intentionally not used here: saving
+    such a session would clobber a working cookie file.
+    """
+    try:
+        cookies = refresh_cookies_from_emulator()
+    except Exception as exc:
+        raise DouyinAuthError(f"emulator: {exc}") from exc
+    try:
+        probe = fetch_page(0, tab="all", cookies=cookies)
+    except DouyinAuthError as exc:
+        raise DouyinAuthError(f"emulator session rejected: {exc}") from exc
+    if not probe:
+        raise DouyinAuthError("emulator session returned no orders")
+    _save_cookies(cookies)
+    return cookies
 
 
 def _save_cookies(cookies: dict[str, str]) -> None:
-    """Persist the live session, readable by the service user only."""
+    """Persist the validated session (plus a last-known-good copy)."""
     COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    COOKIE_FILE.write_text(json.dumps(cookies, ensure_ascii=False, indent=1), encoding="utf-8")
+    payload = json.dumps(cookies, ensure_ascii=False, indent=1)
+    COOKIE_FILE.write_text(payload, encoding="utf-8")
+    try:
+        GOOD_COOKIE_FILE.write_text(payload, encoding="utf-8")
+    except OSError:
+        pass
     try:
         os.chmod(COOKIE_FILE, 0o600)
     except OSError:  # Windows: ACLs already restrict the profile directory
@@ -268,10 +292,12 @@ def fetch_page(page: int, *, tab: str = "all", cookies: dict[str, str]) -> list[
     with urllib.request.urlopen(request, timeout=25) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
-    if payload.get("code") == "10001010A" or payload.get("st") not in (0, "0"):
-        message = str(payload.get("msg") or "")
-        if "登录" in message or payload.get("code") == "10001010A" or payload.get("st") in (None, 8, 10005):
-            raise DouyinAuthError(f"douyin_auth:{payload.get('st')}:{message}")
+    message = str(payload.get("msg") or "")
+    # Only an explicit login error may trigger a cookie refresh. A transient
+    # st/network error must not make the agent overwrite a working session.
+    if payload.get("code") == "10001010A" or "登录" in message:
+        raise DouyinAuthError(f"douyin_auth:{payload.get('st')}:{message}")
+    if payload.get("st") not in (0, "0"):
         raise RuntimeError(f"douyin_api_error:{payload.get('st')}:{message}")
     return payload.get("data") or []
 
@@ -415,10 +441,25 @@ def collect_douyin(mode: str = "recent", *, max_pages: int = 50) -> dict[str, An
 def _fetch_all(cookies: dict[str, str], max_pages: int) -> list[list[dict[str, Any]]]:
     batches: list[list[dict[str, Any]]] = []
     for page in range(0, max_pages):
-        batch = fetch_page(page, tab="all", cookies=cookies)
+        batch: list[dict[str, Any]] | None = None
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                batch = fetch_page(page, tab="all", cookies=cookies)
+                break
+            except DouyinAuthError:
+                raise
+            except Exception as exc:  # transient network / gateway error
+                last_error = exc
+                time.sleep(1.5 * (attempt + 1))
+        if batch is None:
+            raise RuntimeError(f"douyin_page_{page}_failed: {last_error}")
         if not batch:
             break
         batches.append(batch)
+        # Be gentle: the order API is rate limited and aggressive paging can
+        # trigger a session challenge.
+        time.sleep(0.4)
     return batches
 
 
@@ -442,12 +483,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.refresh:
         if args.source == "chrome":
-            cookies = refresh_cookies_from_chrome()
-        elif args.source == "emulator":
-            cookies = refresh_cookies_from_emulator()
-        else:
-            cookies = refresh_cookies()
-        print(f"refreshed {len(cookies)} cookies -> {COOKIE_FILE}")
+            refresh_cookies_from_chrome()
+            print("read from Chrome but NOT saved: web sessions are rejected by the order API")
+            return 0
+        # emulator / auto: validate the App session before persisting it.
+        cookies = refresh_cookies()
+        print(f"validated and saved {len(cookies)} cookies -> {COOKIE_FILE}")
         return 0
 
     if args.json:
