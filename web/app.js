@@ -77,6 +77,17 @@
     });
   }
 
+  // Order lists span multiple years, so an order timestamp always carries the
+  // year; otherwise "01/03" appears above "12/30" at a year boundary.
+  function orderTimeText(value) {
+    const date = parseDate(value);
+    if (!date) return value ? String(value) : "";
+    return date.toLocaleString("zh-CN", {
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+  }
+
   function relativeTime(value) {
     const date = parseDate(value);
     if (!date) return "";
@@ -316,7 +327,7 @@
           <div class="card-top">${platformBadge(order.platform)}${status}</div>
           <div class="card-title">${esc(title)}</div>
           ${sub ? `<div class="card-sub">${esc(sub)}</div>` : ""}
-          <div class="card-bottom">${amount}<span class="card-time">${esc(order.order_time ? timeText(order.order_time) : "")}</span></div>
+          <div class="card-bottom">${amount}<span class="card-time">${esc(order.order_time ? orderTimeText(order.order_time) : "")}</span></div>
         </div>
       </button>`;
     if (!state.isAdmin) return card;
@@ -416,7 +427,7 @@
       <div class="platform-row" data-platform="${esc(item.id)}" role="button" tabindex="0">
         <span class="badge ${esc(item.id)}">${esc(item.label)}</span>
         <div class="platform-meta">
-          <div class="nums"><strong>${item.orders || 0}</strong> 单 · ${item.shipments || 0} 包裹${item.last_order_at ? ` · ${esc(timeText(item.last_order_at))}` : ""}</div>
+          <div class="nums"><strong>${item.orders || 0}</strong> 单 · ${item.shipments || 0} 包裹${item.last_order_at ? ` · ${esc(orderTimeText(item.last_order_at))}` : ""}</div>
           <div class="channels">${(item.channels || []).map((channel) => `<span class="channel ${item.orders > 0 ? "on" : ""}">${esc(channelNames[channel] || channel)}</span>`).join("")}</div>
         </div>
         ${agentButton(item)}
@@ -444,11 +455,13 @@
 
   function renderRecent() {
     const list = $("#recentList");
+    const orderTimestamp = (order) => {
+      const date = parseDate(order.order_time || order.created_at);
+      return date ? date.getTime() : 0;
+    };
     const orders = state.orders
       .filter((order) => !state.recentPlatform || order.platform === state.recentPlatform)
-      .sort((a, b) =>
-        String(b.order_time || b.created_at || "").localeCompare(String(a.order_time || a.created_at || ""))
-      );
+      .sort((a, b) => orderTimestamp(b) - orderTimestamp(a));
     if (!orders.length) {
       list.innerHTML = state.isAdmin
         ? empty(
@@ -664,7 +677,7 @@
               <div class="card-top">${platformBadge(order.platform)}${statusBadge(order.status, order.status_text)}</div>
               <div class="card-title">${esc(order.title || "(无商品名)")}</div>
               <div class="card-sub">${esc([order.shop, order.tracking_no].filter(Boolean).join(" · "))}</div>
-              <div class="card-bottom"><span class="card-amount">${esc(money(order.amount))}</span><span class="card-time">${esc(timeText(order.order_time))}</span></div>
+              <div class="card-bottom"><span class="card-amount">${esc(money(order.amount))}</span><span class="card-time">${esc(orderTimeText(order.order_time))}</span></div>
             </div>
           </button>`;
       }
@@ -759,7 +772,7 @@
         </div>
         ${kv([
           ["店铺", esc(order.shop || "")],
-          ["下单时间", esc(timeText(order.order_time))],
+          ["下单时间", esc(orderTimeText(order.order_time))],
         ])}
         <div class="visitor-note">访客预览会隐藏手机号、地址、订单/运单号、支付金额和物流轨迹等敏感信息。</div>
       `);
@@ -789,7 +802,7 @@
         ["金额", order.amount != null ? esc(money(order.amount)) : ""],
         ["数量", facts.quantity ? `${esc(facts.quantity)} 件` : ""],
         ["支付", esc(facts.payment)],
-        ["下单时间", esc(timeText(order.order_time))],
+        ["下单时间", esc(orderTimeText(order.order_time))],
         ["订单号", esc(order.platform_order_id || "")],
         ["运单号", esc(order.tracking_no || "")],
         ["物流", facts.logistics ? `<span class="logistics">${esc(facts.logistics)}</span>` : ""],
