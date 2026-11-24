@@ -1156,7 +1156,10 @@ def search(
     tokens = tokenize_query(query)
     if not tokens:
         return []
-    # Quote tokens for FTS5 and OR them: matching more terms ranks higher.
+    # Quote tokens for FTS5 and OR them so a document matching more terms is
+    # still preferred when timestamps tie. The primary order is real time:
+    # search mixes orders, SMS and captures, and users expect the newest match
+    # first even when an older document is a stronger keyword match.
     fts_query = " OR ".join('"' + token.replace('"', '""') + '"' for token in tokens)
     params: list[Any] = [fts_query]
     platform_sql = ""
@@ -1169,7 +1172,7 @@ def search(
                bm25(search_fts) AS score
         FROM search_fts
         WHERE search_fts MATCH ?{platform_sql}
-        ORDER BY score
+        ORDER BY occurred_at DESC, score ASC
         LIMIT ?
     """
     try:

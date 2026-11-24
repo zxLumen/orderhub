@@ -104,6 +104,34 @@ class DatabaseTest(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(db.get_shipment(self.conn, "SF2")["status"], "delivered")
 
+    def test_search_sorted_by_time_desc(self):
+        db.upsert_order(
+            self.conn,
+            platform="jd",
+            platform_order_id="OLD-1",
+            title="绿联 充电线 快充 数据线 充电线 数据线",
+            order_time="2020-01-01T00:00:00+00:00",
+        )
+        new_id = db.upsert_order(
+            self.conn,
+            platform="jd",
+            platform_order_id="NEW-1",
+            title="数据线",
+            order_time="2026-11-01T00:00:00+00:00",
+        )
+        self.conn.commit()
+
+        results = db.search(self.conn, "数据线")
+        order_ids = [str(item["doc_id"]) for item in results if item["doc_type"] == "order"]
+        self.assertEqual(len(order_ids), 2)
+        # The older document is the stronger keyword match, but the newest
+        # order must still be first.
+        self.assertEqual(order_ids[0], str(new_id))
+        self.assertEqual(
+            [item["occurred_at"] for item in results],
+            sorted((item["occurred_at"] for item in results), reverse=True),
+        )
+
     def test_search_does_not_match_single_character_noise(self):
         db.upsert_order(
             self.conn,
