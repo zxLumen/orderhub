@@ -46,7 +46,7 @@
 | 采集记录 | 含义 | 处理 |
 |---|---|---|
 | 409 `五平台采集需要 v0.4.0` | 服务端看到的 agent 还是旧版 | 回步骤 1，确认脚本最后打印 `0.4.0` |
-| `login_required` | 该平台登录态失效 | agent 会自动切可见 Chrome 打开登录页并每 5 分钟重试；登录完再点一次采集 |
+| `login_required` | 该平台登录态失效 | 网页平台：agent 会自动切可见 Chrome 打开登录页并每 5 分钟重试；抖音：agent 会自动启动 MuMu 并打开抖音 App，在模拟器里登录后自动抓取会话（不弹浏览器） |
 | `captcha` | 撞到滑块/验证码 | 人工过掉，再点采集（不做自动绕过） |
 | `invalid_page` | 订单页 URL 变了 | 在仓库 `.env` 设 `ORDERHUB_URL_TAOBAO=<登录后订单页地址>`，重跑 `update_agent.bat` |
 | `ok · 0 条` | 页面结构变了，解析没命中 | 把 `data/debug/<平台>-empty-*.html/.png` 回传，改 `app/collectors/web_parser.py` |
@@ -55,17 +55,30 @@
 
 抖音不再走网页 / OCR。App 的订单列表背后是电商 JSON 接口 `ec.snssdk.com/order/page`，只需要登录 Cookie + App 参数，不需要 OCR、Frida 或逐个点订单。
 
-登录态来源按优先级自动选择：
+登录态只从已 root 的 MuMu 模拟器 WebView（`app_webview/Default/Cookies`，明文）读取。抖音订单接口只认 App 会话，Chrome 网页登录会被拒绝（`10001010A`），所以**不要**用网页登录刷新抖音。
 
-1. 已登录的 Chrome 9333（在 Chrome 里打开 `https://www.douyin.com/` 扫码登录一次即可，不需要模拟器）
-2. 已 root 的 MuMu 模拟器 WebView（`app_webview/Default/Cookies`，明文）
+必须带全 `.snssdk.com` 的 Cookie，尤其是 `session_tlb_tag` 和 `multi_sids`；只取 `sessionid` 等少数几个会被接口判定为未登录。
 
-agent 每 6 小时自动拉一次。Cookie 失效时会重新按上面的顺序刷新；模拟器不是必须常驻。
+agent 每天自动采集一次。采集时抖音 App 保持关闭或后台即可，不需要点击订单页。
 
-只用 Chrome 刷新的命令：
+### 登录态过期
+
+会话 `sid_guard` 约 60 天，`session_tlb_tag` 可能更短。过期时 agent 不会弹浏览器，而是：
+
+1. 自动启动 MuMu（没开就开），等待 ADB 就绪
+2. 自动打开抖音 App，把模拟器窗口带到前台
+3. 你在模拟器里确认登录（已登录会自动继续；掉登录就扫码一次）
+4. agent 每 30 秒只读检查一次 App 的 WebView 会话
+5. 发现新的 `sessionid` 后验证接口，通过就保存完整 Cookie 集
+6. 自动重跑采集，恢复
+
+如果 15 分钟内没登录成功，本次放弃，等下一次每日调度再试；不会反复弹窗、不会 force-stop、不会点订单页。
+
+也可以手动刷新（模拟器里登录后完全退出抖音，再运行）：
 
 ```powershell
-.\.venv\Scripts\python.exe -m app.collectors.douyin --refresh --source chrome
+cd E:\Project\orderhub
+.\.venv\Scripts\python.exe -m app.collectors.douyin --refresh
 ```
 
 手动验证：
@@ -74,6 +87,8 @@ agent 每 6 小时自动拉一次。Cookie 失效时会重新按上面的顺序�
 cd E:\Project\orderhub
 .\.venv\Scripts\python.exe -m app.collectors.douyin
 ```
+
+Cookie 文件在 `C:\OrderHub\data\douyin-cookies.json`，最后一次验证通过的备份是同目录的 `douyin-cookies.good.json`。只有接口验证通过才会覆盖。
 
 转转同样没有稳定的公开订单页，没有可用 URL 时走导入。如果你确实找到了可用的订单页地址，可以覆盖：
 
@@ -85,6 +100,6 @@ ORDERHUB_URL_ZHUANZHUAN=<登录后订单页地址>
 
 ## 备注
 
-- 采集器用你自己 Chrome 的登录态，服务端不保存平台 cookie。
+- 网页平台用你自己 Chrome 的登录态；抖音只从模拟器 App 的 WebView 读取。服务端不保存平台 cookie。
 - 每个平台采完会把结果写进 `collector_runs`，历史记录在首页「采集记录」里可查。
 - 调试文件在 `data/debug/`，只有失败或 0 条时才会生成。

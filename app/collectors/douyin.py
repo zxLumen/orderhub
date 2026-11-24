@@ -468,13 +468,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--refresh",
         action="store_true",
-        help="only refresh cookies (Chrome first, emulator fallback)",
+        help="only refresh cookies from the emulator (validated before saving)",
     )
     parser.add_argument(
         "--source",
         choices=("auto", "chrome", "emulator"),
         default="auto",
-        help="cookie source for --refresh",
+        help="cookie source for --refresh (chrome is read-only and never saved)",
     )
     parser.add_argument("--json", action="store_true", help="print mapped orders as JSON")
     args = parser.parse_args(argv)

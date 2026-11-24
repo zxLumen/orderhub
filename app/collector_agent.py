@@ -38,6 +38,20 @@ from .collectors.web import collect_web, login_url, order_url
 
 log = logging.getLogger(__name__)
 
+# Douyin is App-only: when its session expires, the agent opens MuMu and the
+# Douyin App so the user can log in, then captures the fresh WebView session.
+DOUYIN_PACKAGE = "com.ss.android.ugc.aweme"
+MUMU_MANAGER = os.environ.get(
+    "ORDERHUB_MUMU_MANAGER",
+    r"F:\Program Files\Netease\MuMuPlayer-12.0\nx_main\MuMuManager.exe",
+)
+MUMU_ADB = os.environ.get(
+    "ORDERHUB_ADB",
+    r"F:\Program Files\Netease\MuMuPlayer-12.0\nx_device\12.0\shell\adb.exe",
+)
+MUMU_SERIAL = os.environ.get("ORDERHUB_ADB_SERIAL", "127.0.0.1:16384")
+_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
 VERSION = "0.4.0"
 STATE_FILE = "collector-sync.json"
 CHROME_MODE_FILE = Path(config.BASE_DIR) / "data" / "chrome-mode.txt"
@@ -274,6 +288,129 @@ class Agent:
         if not self._page_open(target):
             self._open_platform_tab(target)
 
+    # ------------------------------------------------------------------
+    # Douyin login (App in MuMu; never the browser)
+    # ------------------------------------------------------------------
+    def _run_quiet(self, cmd: list[str], timeout: int = 30) -> subprocess.CompletedProcess[bytes] | None:
+        try:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=timeout,
+                creationflags=_NO_WINDOW,
+            )
+        except Exception as exc:
+            log.debug("command failed %s: %s", cmd[:2], exc)
+            return None
+
+    def _douyin_adb_ready(self) -> bool:
+        result = self._run_quiet([MUMU_ADB, "-s", MUMU_SERIAL, "shell", "echo ok"], timeout=10)
+        return bool(result and result.returncode == 0 and b"ok" in (result.stdout or b""))
+
+    def _start_mumu(self) -> None:
+        if not Path(MUMU_MANAGER).exists():
+            log.warning("douyin login: MuMuManager not found at %s", MUMU_MANAGER)
+            return
+        log.info("douyin login: starting MuMu")
+        self._run_quiet([MUMU_MANAGER, "control", "-v", "0", "launch"], timeout=30)
+
+    def _show_mumu(self) -> None:
+        if not Path(MUMU_MANAGER).exists():
+            return
+        self._run_quiet([MUMU_MANAGER, "control", "-v", "0", "show_window"], timeout=20)
+
+    def _open_douyin_app(self) -> None:
+        log.info("douyin login: opening the Douyin App; please log in in MuMu")
+        self._run_quiet(
+            [
+                MUMU_ADB,
+                "-s",
+                MUMU_SERIAL,
+                "shell",
+                "monkey",
+                "-p",
+                DOUYIN_PACKAGE,
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "1",
+            ],
+            timeout=30,
+        )
+
+    def _ensure_douyin_login(self) -> None:
+        """Bring up MuMu + Douyin so the user can log in (at most once/10 min)."""
+        now = time.time()
+        if now - float(self.state.get("douyin_login_opened") or 0) < 600:
+            return
+        self.state["douyin_login_opened"] = now
+        self._save_state()
+
+        if not self._douyin_adb_ready():
+            self._start_mumu()
+            for _ in range(18):  # up to ~90s for the VM to boot
+                time.sleep(5)
+                if self._douyin_adb_ready():
+                    break
+        if not self._douyin_adb_ready():
+            log.warning("douyin login: emulator/ADB is not ready")
+            return
+        self._show_mumu()
+        self._open_douyin_app()
+
+    def _douyin_login_watch(self) -> None:
+        """After the user logs in, capture the fresh App session automatically."""
+        started = float(self.state.get("pending_douyin_login") or 0)
+        if not started:
+            return
+        now = time.time()
+        if now - float(self.state.get("last_douyin_retry") or 0) < 30:
+            return
+        self.state["last_douyin_retry"] = now
+        self._save_state()
+
+        if now - started > 900:
+            log.warning("douyin login: timed out after 15 minutes; will retry on the next schedule")
+            self.state["pending_douyin_login"] = 0
+            self.state["douyin_login_opened"] = 0
+            self.state["douyin_login_sig"] = ""
+            self._save_state()
+            return
+
+        try:
+            from .collectors.douyin import refresh_cookies, refresh_cookies_from_emulator
+        except Exception as exc:  # pragma: no cover - import failure
+            log.warning("douyin login: cannot import the collector: %s", exc)
+            return
+
+        # Read the WebView DB without hitting the API; only validate when the
+        # session actually changed (i.e. the user has logged in). A refreshed
+        # session_tlb_tag may keep the same sessionid, so fingerprint all three.
+        try:
+            raw = refresh_cookies_from_emulator()
+        except Exception as exc:
+            log.info("douyin login: waiting for the emulator session (%s)", exc)
+            return
+        sig = "|".join(
+            str(raw.get(key) or "") for key in ("sessionid", "session_tlb_tag", "sid_guard")
+        )
+        if not raw.get("sessionid") or sig == self.state.get("douyin_login_sig"):
+            return
+        self.state["douyin_login_sig"] = sig
+        self._save_state()
+
+        try:
+            refresh_cookies()  # validate + persist
+        except Exception as exc:
+            log.info("douyin login: session still rejected (%s)", exc)
+            return
+
+        self.state.pop("pending_douyin_login", None)
+        self.state["douyin_login_opened"] = 0
+        self.state["douyin_login_sig"] = ""
+        self._save_state()
+        log.info("douyin login: session refreshed; collecting")
+        self.collect("recent", platform="douyin")
+
     def _web_login_watch(self) -> None:
         """Retry the pending web platform every 5 minutes until it works."""
         platform = self.state.get("pending_platform")
@@ -302,6 +439,7 @@ class Agent:
 
     def _login_watch(self) -> None:
         """Keep prompting for a login until JD accepts the session again."""
+        self._douyin_login_watch()
         self._web_login_watch()
         if not config.JD_AUTO_LOGIN or not self._chrome_ok():
             return
@@ -464,19 +602,30 @@ class Agent:
             if platform == "douyin":
                 # Douyin's order API only accepts the App-issued session. A
                 # browser login (douyin.com or the jinritemai SSO page) is
-                # rejected with 10001010A, so opening the web login every five
-                # minutes can never fix it: it just loops the QR prompt.
+                # rejected with 10001010A, so never open the web login: bring
+                # up MuMu + the App instead, then capture the fresh session.
                 self.state.pop("pending_platform", None)
                 self.state.pop("pending_state", None)
                 self.state["last_douyin_auth_fail"] = time.time()
-                self._save_state()
-                log.warning(
-                    "douyin auth failed (%s); the web login cannot provide a valid order session",
-                    error,
-                )
+                if error == "login_required":
+                    self.state["pending_douyin_login"] = time.time()
+                    self.state["douyin_login_sig"] = ""
+                    self._save_state()
+                    self._ensure_douyin_login()
+                    log.warning(
+                        "douyin session expired; opened MuMu for an App login (web login cannot help)"
+                    )
+                else:
+                    self._save_state()
+                    log.warning("douyin auth failed (%s)", error)
             elif error in {"login_required", "captcha", "invalid_page"}:
                 self._ensure_platform_login(platform, error)
-        if result.get("ok") and platform in WEB_PLATFORMS:
+        if result.get("ok") and platform == "douyin":
+            self.state.pop("pending_douyin_login", None)
+            self.state["douyin_login_opened"] = 0
+            self.state["douyin_login_sig"] = ""
+            self._save_state()
+        if result.get("ok") and platform in WEB_PLATFORMS and platform != "douyin":
             self.state.pop("pending_platform", None)
             self.state.pop("pending_state", None)
             self._save_state()

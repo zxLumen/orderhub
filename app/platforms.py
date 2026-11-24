@@ -52,7 +52,7 @@ PLATFORMS: dict[str, dict[str, Any]] = {
         "login_url": "https://haohuo.jinritemai.com/views/neworder/center",
         "agent_status": "ready",
         "channels": ["agent", "export", "sms", "bill", "manual"],
-        "import_hint": "Windows 采集 agent 已支持抖音：自动从模拟器 WebView 读取登录态并调用订单接口（无需 OCR、无需逐个点订单）。",
+        "import_hint": "Windows 采集 agent 已支持抖音：自动从模拟器 WebView 读取登录态并调用订单接口（无需 OCR、无需逐个点订单）。登录过期时 agent 会自动启动 MuMu 并打开抖音 App，请在模拟器里完成登录，之后自动抓取会话并恢复采集（不支持网页登录）。",
         "keywords": ("抖音", "抖店", "抖音商城", "字节", "微播视界", "火山引擎", "抖音电商"),
     },
     "xianyu": {
