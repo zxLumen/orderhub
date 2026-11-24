@@ -1,4 +1,4 @@
-# Manual fallback for refreshing the Douyin App session.
+﻿# Manual fallback for refreshing the Douyin App session.
 #
 # Normally the collector agent does this automatically: when the order API
 # rejects the session it opens MuMu + the Douyin App, waits for you to log in,
